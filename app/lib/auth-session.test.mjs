@@ -390,12 +390,26 @@ test("Vercel never trusts native identity headers or permits preview membership 
   }
 });
 
-test("unlisted, disabled and wrong-portal Google members cannot establish school sessions", async () => {
-  for (const scenario of ["unlisted", "disabled", "wrong-portal"]) {
+test("an unlisted verified school Google account signs in as a teacher only", async () => {
+  for (const portal of ["teacher", "admin"]) {
+    const h = await harness();
+    try {
+      h.state.profile = { ...profile, email: "unlisted.staff@elitelac.com" };
+      const response = await h.callback(await h.start(portal));
+      const member = h.sqlite.prepare("SELECT role, status FROM app_users WHERE email = 'unlisted.staff@elitelac.com'").get();
+      assert.deepEqual({ ...member }, { role: "teacher", status: "active" });
+      assert.equal(response.status, portal === "teacher" ? 303 : 403);
+      if (portal === "teacher") assert.equal(new URL(response.headers.get("location"), "https://reflection.example").pathname, "/teacher");
+      assert.equal(h.sqlite.prepare("SELECT count(*) AS count FROM staff_sessions").get().count, portal === "teacher" ? 1 : 0);
+    } finally { h.close(); }
+  }
+});
+
+test("disabled and wrong-portal Google members cannot establish school sessions", async () => {
+  for (const scenario of ["disabled", "wrong-portal"]) {
     const h = await harness();
     try {
       h.member();
-      if (scenario === "unlisted") h.state.profile = { ...profile, email: "unlisted.staff@elitelac.com" };
       if (scenario === "disabled") h.sqlite.prepare("UPDATE app_users SET status='disabled'").run();
       const response = await h.callback(await h.start(scenario === "wrong-portal" ? "admin" : "teacher"));
       assert.equal(response.status, 403);

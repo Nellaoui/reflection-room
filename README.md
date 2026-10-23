@@ -2,7 +2,7 @@
 
 A staff workspace for morning and lunch break reflections, attendance, missed sessions and student history.
 
-- One Google sign-in for approved `@elitelac.com` staff.
+- One Google sign-in for `@elitelac.com` staff. Any verified school Google account joins as a Teacher on first sign-in.
 - Admins can switch between Admin, Teacher and Moderator views.
 - Moderators have Teacher tools and a separate view containing only Student and Teacher insights.
 - Teachers assign sessions and record attendance, with no access to insights. Students have no access.
@@ -22,7 +22,7 @@ The Google callback must be exactly `https://YOUR-DOMAIN/auth/google/callback`. 
 
 Run `npm run db:migrate` to inspect the database, then `npm run db:migrate -- --apply` to initialise an empty database or apply pending migrations to a verified database. Keep a private backup before upgrades. The runner accepts only an exact checked-in migration prefix with a matching schema; it never stamps an unrelated database. Existing school data is transferred privately, separately from source control.
 
-The first verified login by `t-wiam-zahri@elitelac.com` creates the initial administrator. Administrators add approved school accounts and select Teacher, Moderator or Admin in User management.
+The first verified login by `t-wiam-zahri@elitelac.com` creates the initial administrator. Every other verified `@elitelac.com` Google account is added automatically as a Teacher the first time it signs in. Administrators can still add accounts ahead of time, change roles to Moderator or Admin, and disable or delete accounts in User management; disabled or deleted accounts stay blocked.
 
 ## Checks
 

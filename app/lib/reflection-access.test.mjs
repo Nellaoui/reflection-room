@@ -451,7 +451,6 @@ test("Google admission bootstraps only the configured verified initial administr
   try {
     h.state.previewAllowed = false;
     const { resolveVerifiedGoogleMember, requireStaffMembership } = h.load("app/lib/reflection-membership");
-    await assert.rejects(() => resolveVerifiedGoogleMember({ subject: "teacher-sub", email: "teacher@elitelac.com", name: "Teacher" }), /not been added/);
     await assert.rejects(() => resolveVerifiedGoogleMember({ subject: "outside-sub", email: "t-wiam-zahri@elitelac.com.other.example", name: "Outside" }), /school Google/);
     assert.equal(h.sqlite.prepare("SELECT count(*) AS count FROM app_users").get().count, 0);
     const profile = { subject: "initial-admin-sub", email: "t-wiam-zahri@elitelac.com", name: "Initial School Admin" };
@@ -465,6 +464,26 @@ test("Google admission bootstraps only the configured verified initial administr
     await assert.rejects(() => requireStaffMembership({ ...owner, authSource: "chatgpt" }), /school Google/);
     const admittedSession = await requireStaffMembership({ ...admitted[0], authSource: "google" });
     assert.equal(admittedSession.memberId, admitted[0].memberId);
+  } finally { h.close(); }
+});
+
+test("Google admission adds new verified school accounts as teachers but never revives removed staff", async () => {
+  const h = await harness();
+  try {
+    h.state.previewAllowed = false;
+    const { resolveVerifiedGoogleMember } = h.load("app/lib/reflection-membership");
+    const profile = { subject: "new-teacher-sub", email: "New.Teacher@elitelac.com", name: "New Teacher" };
+    const admitted = await Promise.all([resolveVerifiedGoogleMember(profile), resolveVerifiedGoogleMember(profile)]);
+    assert.equal(admitted[0].memberId, admitted[1].memberId);
+    assert.equal(admitted[0].role, "teacher");
+    const row = h.sqlite.prepare("SELECT email, role, status FROM app_users WHERE id = ?").get(admitted[0].memberId);
+    assert.deepEqual({ ...row }, { email: "new.teacher@elitelac.com", role: "teacher", status: "active" });
+    await assert.rejects(() => resolveVerifiedGoogleMember({ subject: "gmail-sub", email: "someone@gmail.com", name: "Outside" }), /school Google/);
+    h.sqlite.prepare("UPDATE app_users SET status='disabled' WHERE id = ?").run(admitted[0].memberId);
+    await assert.rejects(() => resolveVerifiedGoogleMember(profile), /disabled/);
+    h.sqlite.prepare("UPDATE app_users SET deleted_at='2026-10-23' WHERE id = ?").run(admitted[0].memberId);
+    await assert.rejects(() => resolveVerifiedGoogleMember(profile), /disabled/);
+    assert.equal(h.sqlite.prepare("SELECT count(*) AS count FROM app_users WHERE email = 'new.teacher@elitelac.com'").get().count, 1);
   } finally { h.close(); }
 });
 

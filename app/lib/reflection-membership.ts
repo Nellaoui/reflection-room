@@ -89,15 +89,19 @@ export async function resolveVerifiedGoogleMember(
   let [member] = linkedMemberId
     ? await db.select().from(appUsers).where(eq(appUsers.id, linkedMemberId)).limit(1)
     : await db.select().from(appUsers).where(eq(appUsers.email, email)).limit(1);
-  if (!member && !linkedMemberId && email === INITIAL_ADMIN_EMAIL.toLowerCase()) {
+  // Any verified school account without a profile joins as a teacher (the
+  // configured initial administrator as admin). Existing rows, including
+  // disabled or deleted ones, are never recreated or re-enabled here.
+  if (!member && !linkedMemberId) {
     await db.insert(appUsers).values({
       id: crypto.randomUUID(), email,
       name: profile.name.trim().slice(0, 120) || email,
-      role: "admin", status: "active", createdAt: new Date().toISOString(),
+      role: email === INITIAL_ADMIN_EMAIL.toLowerCase() ? "admin" : "teacher",
+      status: "active", createdAt: new Date().toISOString(),
     }).onConflictDoNothing({ target: appUsers.email });
     [member] = await db.select().from(appUsers).where(eq(appUsers.email, email)).limit(1);
   }
-  if (!member) throw new ApiError(403, "Your school account has not been added by an administrator.");
+  if (!member) throw new ApiError(403, "Your school account could not be found. Contact your school administrator.");
   if (member.status !== "active" || member.deletedAt) throw new ApiError(403, "Your staff access has been disabled. Contact your school administrator.");
   return {
     userId: `google:${profile.subject}`, email, displayName: member.name,
