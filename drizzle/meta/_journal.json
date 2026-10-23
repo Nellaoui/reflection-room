@@ -1,0 +1,55 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1792679495677,
+      "tag": "0000_aromatic_gladiator",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1792680256173,
+      "tag": "0001_condemned_green_goblin",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1792681167532,
+      "tag": "0002_wakeful_stellaris",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1792684483714,
+      "tag": "0003_dusty_cardiac",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1792686848191,
+      "tag": "0004_demonic_arachne",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1792705646950,
+      "tag": "0005_staff_activity",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1792756274297,
+      "tag": "0006_moderator_access",
+      "breakpoints": true
+    }
+  ]
+}

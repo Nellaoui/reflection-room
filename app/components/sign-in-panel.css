@@ -1,0 +1,30 @@
+.rr-sign-in{min-height:100svh;background:radial-gradient(ellipse at 50% 0,#e9efdf 0,transparent 56%),#f8f9f4;color:#263d2d;display:flex;align-items:center;justify-content:center;padding:44px 24px 30px}
+.rr-sign-in *{box-sizing:border-box}
+.rr-sign-in-shell{width:100%;max-width:440px}
+.rr-sign-in-school{display:flex;align-items:center;justify-content:center;gap:15px;margin-bottom:31px}
+.rr-sign-in-school img{display:block;object-fit:contain;border-radius:50%;flex-shrink:0}
+.rr-sign-in-school strong,.rr-sign-in-school span{display:block}
+.rr-sign-in-school strong{font-size:18px;letter-spacing:-.4px;font-weight:600;color:#173c2a}
+.rr-sign-in-school span{font-size:11px;color:#63715d;margin-top:5px}
+.rr-sign-in-card{border:1px solid #dfe6d9;border-top:3px solid #0e5403;background:#fff;border-radius:13px;padding:34px 30px 30px;box-shadow:0 9px 30px #173c2a05}
+.rr-sign-in-heading{text-align:center;margin:0 auto 28px}
+.rr-sign-in-heading h1{font-size:30px;letter-spacing:-1.1px;line-height:1.25;font-weight:500;margin:0 0 13px;color:#173c2a}
+.rr-sign-in-heading>p{font-size:13px;line-height:1.8;color:#63715d;max-width:450px;margin:0 auto}
+.rr-school-domain{display:inline-block;font-size:11px;font-weight:500;color:#315428;background:#ecf1e5;border:1px solid #dce5d4;border-radius:20px;padding:6px 12px;margin-top:14px}
+.rr-google-setup{display:flex;align-items:center;justify-content:center;gap:8px;border:1px solid #e8dfbd;background:#fcf9ed;padding:11px;border-radius:7px;margin-bottom:18px;color:#6b5c2d}
+.rr-google-setup>svg{flex-shrink:0;color:#8b762b}
+.rr-google-setup p{font-size:11px;color:#776b48;line-height:1.8;margin:0}
+.rr-google-sign-in{display:flex;align-items:center;justify-content:center;gap:11px;border:1px solid #cdd9c6;border-radius:7px;min-height:46px;padding:11px 14px;text-decoration:none;background:#fff;font-size:12px;font-weight:500;color:#263d2d;line-height:1.5;width:100%;margin-top:auto;transition:border-color .15s,background-color .15s,box-shadow .15s}
+.rr-google-sign-in>svg{flex-shrink:0}
+.rr-google-sign-in>svg:last-child{margin-left:auto;color:#6e8263}
+.rr-google-sign-in>span{flex:1;text-align:center}
+.rr-google-sign-in:not(:disabled):hover{background:#f8fbf5;border-color:#648a55;box-shadow:0 2px 6px #173c2a0a}
+.rr-google-sign-in:focus-visible,.rr-preview-sign-in:focus-visible{outline:3px solid #a9c696;outline-offset:4px}
+.rr-google-sign-in:disabled{color:#65705f;border-color:#e1e5db;background:#f3f5f0;cursor:not-allowed}
+.rr-google-sign-in:disabled .rr-google-mark{opacity:.65}
+.rr-preview-sign-in{display:flex;justify-content:center;align-items:center;gap:5px;font-size:10px;color:#47643b;text-decoration:underline;text-underline-offset:3px;margin-top:17px;padding-top:16px;border-top:1px solid #edf0e8}
+.rr-preview-sign-in:hover{color:#0e5403}
+.rr-sign-in-footer{display:flex;align-items:center;justify-content:center;gap:8px;color:#6d7d62;margin:23px auto 0;font-size:10px;line-height:1.8;text-align:center;max-width:580px}
+.rr-sign-in-footer svg{flex-shrink:0;color:#6b8560}
+@media(max-width:480px){.rr-sign-in{padding:35px 20px}.rr-sign-in-school{margin-bottom:26px}.rr-sign-in-school img{width:62px;height:62px}.rr-sign-in-school strong{font-size:17px}.rr-sign-in-card{padding:29px 22px 25px}.rr-sign-in-heading h1{font-size:28px;letter-spacing:-.9px}.rr-sign-in-heading{margin-bottom:24px}.rr-sign-in-heading>p{font-size:12px}.rr-sign-in-footer{align-items:flex-start}.rr-google-setup p{font-size:10px}}
+@media(prefers-reduced-motion:reduce){.rr-google-sign-in{transition:none}}
