@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { assignmentInput, attendanceInput, rosterInput, validDate, userCreateInput, userPatchInput } from "./reflection-validation.ts";
 
-test("calendar dates reject rolled-over days while allowing weekends and leap days", () => {
+test("generic calendar dates reject rollovers without restricting history date filters", () => {
   assert.equal(validDate("2028-02-29"), "2028-02-29");
   assert.equal(validDate("2026-10-24"), "2026-10-24");
   for (const date of ["2026-02-29", "2026-04-31", "2026-13-01", "2026-1-02", "tomorrow"]) {
@@ -11,10 +11,21 @@ test("calendar dates reject rolled-over days while allowing weekends and leap da
 });
 
 test("a student can receive both sessions and repeated IDs are deduplicated", () => {
-  assert.deepEqual(assignmentInput({ studentIds: ["pupil-1", "pupil-1"], slots: ["morning", "lunch"], date: "2026-10-22", reason: "", assignedBy: "" }, "A Teacher"), {
-    studentIds: ["pupil-1"], slots: ["morning", "lunch"], date: "2026-10-22", reason: "", assignedBy: "A Teacher",
+  assert.deepEqual(assignmentInput({ studentIds: ["pupil-1", "pupil-1"], slots: ["morning", "lunch"], date: "2026-10-22", reason: "  Disruption\n during\tclass.  ", assignedBy: "" }, "A Teacher"), {
+    studentIds: ["pupil-1"], slots: ["morning", "lunch"], date: "2026-10-22", reason: "Disruption during class.", assignedBy: "A Teacher",
   });
   assert.throws(() => assignmentInput({ studentIds: ["pupil-1"], slots: ["afternoon"], date: "2026-10-22" }, "Teacher"));
+});
+
+test("new assignments require a visible nonblank reason with the existing length limit", () => {
+  const input = { studentIds: ["pupil-1"], slots: ["morning"], date: "2026-10-22" };
+  for (const reason of [undefined, null, "", " \t\n ", "\u00a0\u3000", "\u200b\u200c\u2060"]) {
+    assert.throws(() => assignmentInput({ ...input, reason }, "Teacher"), /Reason is required/);
+  }
+  for (const reason of [42, false, {}, []]) assert.throws(() => assignmentInput({ ...input, reason }, "Teacher"), /Reason must be text/);
+  assert.throws(() => assignmentInput({ ...input, reason: "x".repeat(1001) }, "Teacher"), /1000 characters/);
+  assert.equal(assignmentInput({ ...input, reason: "Ａ reminder to reflect." }, "Teacher").reason, "A reminder to reflect.");
+  assert.equal(assignmentInput({ ...input, reason: "x".repeat(1000) }, "Teacher").reason.length, 1000);
 });
 
 test("roster import deduplicates spelling case and whitespace within the same grade and class", () => {

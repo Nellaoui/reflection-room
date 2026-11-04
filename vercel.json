@@ -3,6 +3,12 @@
   "framework": "nextjs",
   "buildCommand": "npm run build",
   "installCommand": "npm ci",
+  "crons": [
+    {
+      "path": "/api/cron/weekly-report",
+      "schedule": "0 14 * * 5"
+    }
+  ],
   "regions": [
     "dub1"
   ]

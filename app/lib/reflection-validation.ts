@@ -54,11 +54,14 @@ export function assignmentInput(value: unknown, fallbackName: string) {
     throw new ValidationError("Choose morning break, lunch break, or both.");
   }
   const slots = [...new Set(body.slots)] as ReflectionSlot[];
+  if (body.reason === undefined || body.reason === null) throw new ValidationError("Reason is required.");
+  const reason = text(body.reason, "Reason", 1000);
+  if (!reason.replace(/[\p{White_Space}\p{Cf}]/gu, "")) throw new ValidationError("Reason is required.");
   return {
     studentIds,
     slots,
     date: validDate(body.date),
-    reason: text(body.reason, "Reason", 1000, true),
+    reason,
     // Attribution comes from active server membership. Legacy clients may still
     // send assignedBy, but it must never override the authenticated staff name.
     assignedBy: fallbackName.slice(0, 120),

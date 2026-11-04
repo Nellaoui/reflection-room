@@ -5,10 +5,13 @@ import { ApiError, authenticatedApi, json, readJson } from "@/app/lib/reflection
 import { assignmentInput, chunks } from "@/app/lib/reflection-validation";
 import { isUniqueConstraintError } from "@/app/lib/reflection-errors";
 import { activityRowsStatement, sessionLabel } from "@/app/lib/reflection-activity";
+import { schoolDayClosure } from "@/app/lib/school-calendar";
 
 export async function POST(request: Request) {
   return authenticatedApi(request, true, async (user) => {
     const input = assignmentInput(await readJson(request), user.displayName);
+    const closed = schoolDayClosure(input.date);
+    if (closed) throw new ApiError(400, closed);
     const db = getDb();
     const knownIds = new Set<string>();
     for (const group of chunks(input.studentIds, 90)) {

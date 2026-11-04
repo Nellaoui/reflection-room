@@ -106,3 +106,23 @@ export const staffOauthChallenges = sqliteTable("staff_oauth_challenges", {
   createdAt: integer("created_at").notNull(),
   expiresAt: integer("expires_at").notNull(),
 }, (table) => [index("staff_oauth_expiry_idx").on(table.expiresAt), check("staff_oauth_portal_check", sql`${table.portal} IN ('admin', 'teacher', 'moderator')`)]);
+
+// One frozen, approved insight email per school week. Provider uncertainty is kept
+// explicit so an old request cannot silently produce a duplicate email.
+export const weeklyReportDeliveries = sqliteTable("weekly_report_deliveries", {
+  weekKey: text("week_key").primaryKey(),
+  periodStart: text("period_start").notNull(),
+  periodEnd: text("period_end").notNull(),
+  status: text("status", { enum: ["sending", "sent", "retryable", "uncertain"] }).notNull(),
+  attemptToken: text("attempt_token").notNull(),
+  attempts: integer("attempts").notNull().default(1),
+  payload: text("payload").notNull(),
+  claimedAt: integer("claimed_at").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+  providerMessageId: text("provider_message_id"),
+  errorCode: text("error_code"),
+}, (table) => [
+  check("weekly_report_status_check", sql`${table.status} IN ('sending', 'sent', 'retryable', 'uncertain')`),
+  check("weekly_report_attempts_check", sql`${table.attempts} > 0`),
+]);
