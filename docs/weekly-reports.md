@@ -2,6 +2,8 @@
 
 Automatic sending is **off by default**. An administrator can review the exact email in **Weekly report** without sending it. Approve the content, recipients and sender before activation. The email contains named student and teacher tables for the scheduled Monday–Friday sessions, without free-text reasons. It includes all students with sessions in that week and all staff with assignment activity. The secure insights link requires staff sign-in and an appropriate role.
 
+The interface and report preview can be published before migration `0007`. If the delivery ledger is missing, the preview shows **Database update** and sending remains unavailable. Existing school records are unchanged.
+
 ## Prepare
 
 1. Back up the database privately. Run `npm run db:migrate` to inspect it, then `npm run db:migrate -- --apply` to apply pending migrations. Migration `0007_weekly_report_deliveries` adds only the delivery ledger; it does not change school records.

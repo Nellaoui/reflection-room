@@ -60,8 +60,31 @@ export async function weeklyReportPreview(db: ReportDb, { now = new Date(), env 
   const readiness = weeklyReportReadiness(env);
   const preview = await loadWeeklyReport(db, now, readiness.appUrl || previewOrigin);
   const [lastDelivery] = await db.select({ weekKey: weeklyReportDeliveries.weekKey, status: weeklyReportDeliveries.status, attempts: weeklyReportDeliveries.attempts, updatedAt: weeklyReportDeliveries.updatedAt })
-    .from(weeklyReportDeliveries).orderBy(desc(weeklyReportDeliveries.updatedAt)).limit(1);
+    .from(weeklyReportDeliveries).orderBy(desc(weeklyReportDeliveries.updatedAt)).limit(1).catch((error: unknown) => {
+      // Deploying the read-only preview can precede the additive migration.
+      // Only this missing table is recoverable; school-data and connection
+      // failures must still fail, and sending still requires a ledger claim.
+      if (!isMissingReportLedger(error)) throw error;
+      readiness.ready = false;
+      readiness.missing.push("Database update");
+      return [];
+    });
   return { preview, readiness, lastDelivery: lastDelivery || null };
+}
+
+function isMissingReportLedger(error: unknown): boolean {
+  let current = error;
+  const visited = new Set<object>();
+  for (let depth = 0; depth < 8 && current && typeof current === "object" && !visited.has(current); depth++) {
+    visited.add(current);
+    const failure = current as { name?: unknown; code?: unknown; message?: unknown; cause?: unknown };
+    if ((failure.name === "LibsqlError" || failure.name === "SqliteError")
+      && (failure.code === "SQLITE_ERROR" || failure.code === "SQLITE_UNKNOWN")
+      && typeof failure.message === "string"
+      && /^(?:SQLITE_(?:ERROR|UNKNOWN):\s*)?(?:SQLite error:\s*)?no such table:\s*(?:main\.)?weekly_report_deliveries$/i.test(failure.message.trim())) return true;
+    current = failure.cause;
+  }
+  return false;
 }
 
 async function idempotencyKey(appUrl: string, weekKey: string) {

@@ -8,6 +8,7 @@ import { createTestDatabase } from "./libsql-test-db.mjs";
 
 const require = createRequire(import.meta.url);
 const ts = require("typescript");
+const { LibsqlError } = require("@libsql/client");
 const projectRoot = fileURLToPath(new URL("../../", import.meta.url));
 const friday = new Date("2026-11-06T14:10:00.000Z");
 const safeEnv = {
@@ -333,6 +334,86 @@ test("weekly preview is admin-only, private, includes approved named tables and 
       assert.equal((await h.call("reports/weekly")).status, 401);
     });
   } finally { h.close(); }
+});
+
+test("pre-migration preview keeps school records visible and requires a database update when only the ledger is missing", async () => {
+  const h = await harness();
+  try {
+    h.student(); h.assignment();
+    h.sqlite.exec("DROP TABLE weekly_report_deliveries");
+    const preview = await h.service.weeklyReportPreview(h.db, { now: friday, env: safeEnv, previewOrigin: "https://reflection.example.edu" });
+    assert.equal(preview.preview.metrics.initial, 1);
+    assert.match(preview.preview.text, /Private pupil-a/);
+    assert.equal(preview.lastDelivery, null);
+    assert.equal(preview.readiness.enabled, true);
+    assert.equal(preview.readiness.ready, false);
+    assert.deepEqual(preview.readiness.missing, ["Database update"]);
+    assert.equal(h.sqlite.prepare("SELECT count(*) AS n FROM reflection_assignments").get().n, 1);
+    assert.equal(h.sqlite.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name='weekly_report_deliveries'").get().n, 0);
+    await withEnvironment(safeEnv, async () => {
+      const response = await h.call("reports/weekly");
+      assert.equal(response.status, 200);
+      assert.equal(response.data.readiness.ready, false);
+      assert.ok(response.data.readiness.missing.includes("Database update"));
+      assert.match(response.headers.get("cache-control"), /no-store/);
+      assert.doesNotMatch(JSON.stringify(response.data), /no such table|SQLITE_|fixture-key|fixture-weekly-cron/);
+    });
+  } finally { h.close(); }
+});
+
+test("preview recognises a wrapped remote missing-ledger error without hiding other database failures", async () => {
+  const h = await harness();
+  try {
+    h.student(); h.assignment();
+    const remoteMissing = new Error("Query transport wrapper", { cause: new LibsqlError("SQLite error: no such table: main.weekly_report_deliveries", "SQLITE_UNKNOWN") });
+    let failure = remoteMissing;
+    h.state.beforeQuery = sql => { if (sql.includes('from "weekly_report_deliveries"')) throw failure; };
+    const recovered = await h.service.weeklyReportPreview(h.db, { now: friday, env: safeEnv, previewOrigin: "https://reflection.example.edu" });
+    assert.equal(recovered.readiness.ready, false);
+    assert.deepEqual(recovered.readiness.missing, ["Database update"]);
+    for (const error of [
+      new LibsqlError("Database connection unavailable", "SERVER_ERROR"),
+      new LibsqlError("Not authorised", "AUTH_ERROR"),
+      new LibsqlError("no such table: students", "SQLITE_ERROR"),
+      new LibsqlError("no such column: weekly_report_deliveries.week_key", "SQLITE_ERROR"),
+      new LibsqlError('near "from": syntax error', "SQLITE_ERROR"),
+      new Error("no such table: weekly_report_deliveries"),
+    ]) {
+      failure = error;
+      await assert.rejects(h.service.weeklyReportPreview(h.db, { now: friday, env: safeEnv, previewOrigin: "https://reflection.example.edu" }), caught => {
+        for (let cause = caught, depth = 0; cause && depth < 8; cause = cause.cause, depth++) if (cause === error) return true;
+        return false;
+      });
+    }
+    h.state.beforeQuery = null;
+    h.sqlite.exec("DROP TABLE reflection_assignments");
+    await assert.rejects(h.service.weeklyReportPreview(h.db, { now: friday, env: safeEnv, previewOrigin: "https://reflection.example.edu" }));
+  } finally { h.close(); }
+});
+
+test("missing delivery ledger fails the authenticated cron closed before any provider request", async () => {
+  const h = await harness();
+  const messages = [];
+  const originalError = console.error;
+  try {
+    h.student(); h.assignment();
+    h.sqlite.exec("DROP TABLE weekly_report_deliveries");
+    let providerCalls = 0;
+    const dispatch = () => h.service.dispatchWeeklyReport({ now: friday, env: safeEnv, db: h.db, fetcher: async () => { providerCalls++; return Response.json({ id: "must-not-send" }); } });
+    const cron = moduleLoader({
+      "@/app/lib/reflection-api": h.load("app/lib/reflection-api"),
+      "@/app/lib/weekly-report-delivery": { dispatchWeeklyReport: dispatch },
+    })("app/api/cron/weekly-report/route");
+    console.error = (...args) => messages.push(args);
+    await withEnvironment(safeEnv, async () => {
+      const response = await cron.GET(new Request("https://reflection.example.edu/api/cron/weekly-report", { headers: { authorization: `Bearer ${safeEnv.CRON_SECRET}` } }));
+      assert.equal(response.status, 503);
+      assert.deepEqual(await response.json(), { error: "Weekly email delivery is unavailable." });
+    });
+    assert.equal(providerCalls, 0);
+    assert.deepEqual(messages, [["Weekly report delivery could not be completed."]]);
+    assert.equal(h.sqlite.prepare("SELECT count(*) AS n FROM reflection_assignments").get().n, 1);
+  } finally { console.error = originalError; h.close(); }
 });
 
 test("cron requires a constant-time checked secret; anonymous or spoofed cron user-agent never gains access", async () => {
