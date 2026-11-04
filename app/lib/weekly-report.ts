@@ -112,6 +112,10 @@ function displayName(value: string | undefined, fallback: string): string {
   return !cleaned || /[^\s@]+@[^\s@]+\.[^\s@]+/.test(cleaned) ? fallback : cleaned.slice(0, 120);
 }
 
+function counted(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
 export function buildWeeklyReport(assignments: ReportAssignment[], { now = new Date(), appUrl }: { now?: Date; appUrl: string }): WeeklyReport {
   const origin = safeOrigin(appUrl, true);
   if (!origin) throw new Error("A valid report website URL is required.");
@@ -169,7 +173,7 @@ export function buildWeeklyReport(assignments: ReportAssignment[], { now = new D
     initialSessionsWithoutReason: initialSessions.filter(assignment => assignment.reasonRecorded === false).length,
   };
   const suggestedActions: string[] = [];
-  if (metrics.studentsWithRepeatedReferralDays) suggestedActions.push(`Arrange supportive check-ins for the ${metrics.studentsWithRepeatedReferralDays} students with initial reflections scheduled on two or more separate days.`);
+  if (metrics.studentsWithRepeatedReferralDays) suggestedActions.push(`Arrange supportive check-ins for the ${counted(metrics.studentsWithRepeatedReferralDays, "student")} with initial reflections scheduled on two or more separate days.`);
   if (metrics.missedAwaitingFollowUp || metrics.studentsWithRepeatedAbsences) suggestedActions.push("Cross-check missed sessions with school attendance before agreeing follow-up sessions with phase leaders.");
   if (metrics.initial) suggestedActions.push("Discuss class and teacher patterns alongside class size, timetable and existing support before drawing conclusions.");
   if (metrics.initialSessionsWithoutReason) suggestedActions.push("Follow up missing reason records with the referring staff.");
@@ -198,16 +202,16 @@ export function buildWeeklyReport(assignments: ReportAssignment[], { now = new D
     "Dear Mr Philip and Phase Leaders,", "",
     `Here are this week’s reflection patterns to support follow-up, as of ${period.asOf} Casablanca:`, "",
     "Student patterns",
-    `• ${metrics.studentsWithRepeatedReferralDays} students had initial reflections scheduled on two or more separate days.`,
-    `• ${metrics.studentsWithRepeatedAbsences} students missed two or more recorded sessions.`,
-    `• ${metrics.missedAwaitingFollowUp} missed sessions still need a follow-up.`, "",
+    `• ${counted(metrics.studentsWithRepeatedReferralDays, "student")} had initial reflections scheduled on two or more separate days.`,
+    `• ${counted(metrics.studentsWithRepeatedAbsences, "student")} missed two or more recorded sessions.`,
+    `• ${counted(metrics.missedAwaitingFollowUp, "missed session")} still ${metrics.missedAwaitingFollowUp === 1 ? "needs" : "need"} a follow-up.`, "",
     "Teacher and class patterns",
-    `• ${metrics.referringTeachers} staff assigned ${metrics.initial} initial sessions; ${metrics.followUps} follow-ups were scheduled separately. In total, ${metrics.students} students had sessions this week.`,
+    `• ${counted(metrics.referringTeachers, "staff member")} assigned ${counted(metrics.initial, "initial session")}; ${counted(metrics.followUps, "follow-up")} ${metrics.followUps === 1 ? "was" : "were"} scheduled separately. In total, ${counted(metrics.students, "student")} had sessions this week.`,
     `• Highest-volume classes: ${classSummary}.`,
     ...(metrics.largestTeacherShare === null ? [] : [`• The largest individual share of initial sessions was ${metrics.largestTeacherShare}%.`]),
     `• Compared with last week: initial sessions ${change(patterns.previousWeek.initialChange)}, recorded absences ${change(patterns.previousWeek.absentChange)}.`,
     `• Attendance: ${metrics.present} present, ${metrics.absent} absent, ${metrics.pending} pending.`,
-    ...(metrics.initialSessionsWithoutReason ? [`• ${metrics.initialSessionsWithoutReason} initial sessions have no reason recorded.`] : []), "",
+    ...(metrics.initialSessionsWithoutReason ? [`• ${counted(metrics.initialSessionsWithoutReason, "initial session")} ${metrics.initialSessionsWithoutReason === 1 ? "has" : "have"} no reason recorded.`] : []), "",
     "Suggested next steps",
     ...(suggestedActions.length ? suggestedActions.map(action => `• ${action}`) : ["No reflection sessions are recorded for this reporting week."]), "",
     "Student records for review (all students with sessions this week)",
@@ -226,6 +230,6 @@ export function buildWeeklyReport(assignments: ReportAssignment[], { now = new D
   const teacherTable = tables.teachers.length ? `<table aria-label="Teacher assignment overview" style="width:100%;border-collapse:collapse;table-layout:fixed"><thead><tr><th scope="col" style="${heading}">Teacher</th><th scope="col" style="${heading}">Assignments</th><th scope="col" style="${heading}">Session outcomes</th></tr></thead><tbody>${tables.teachers.map(teacher => `<tr><th scope="row" style="${cell};text-align:left;font-weight:normal"><strong>${escapeHtml(teacher.name)}</strong></th><td style="${cell}">Initial sessions: ${teacher.initial}<br/>Students: ${teacher.students}<br/>Follow-ups: ${teacher.followUps}</td><td style="${cell}">Present: ${teacher.present}<br/>Absent: ${teacher.absent}<br/>Pending: ${teacher.pending}</td></tr>`).join("")}</tbody></table>` : "<p>No teacher assignment activity recorded this week.</p>";
   const bodyStart = lines.indexOf("Student records for review (all students with sessions this week)");
   const summary = lines.slice(0, bodyStart).join("\n");
-  const html = `<!doctype html><html lang="en"><body style="margin:0;background:#f8f9f4;color:#263b2c;font:16px/1.7 Arial,sans-serif"><main style="max-width:760px;margin:24px auto;padding:24px;background:#fff;border:1px solid #e2e7dc;border-top:4px solid #0e5403;border-radius:10px"><h1 style="font-size:26px;color:#173c2a">Reflection Room</h1><pre style="font:inherit;white-space:pre-wrap;overflow-wrap:anywhere">${escapeHtml(summary)}</pre><h2 style="font-size:20px">Student records for review</h2><p>All ${tables.studentCount} students with sessions this week, ordered by initial session days, recorded absences and initial sessions.</p>${studentTable}<h2 style="font-size:20px">Teacher assignment overview</h2>${teacherTable}<p>Review the complete records in the <a style="color:#0e5403" href="${escapeHtml(dashboardUrl)}">secure insights dashboard</a>.</p><p>Kind regards,<br/>Reflection Room | London Academy</p><p style="font-size:13px;color:#617054">${escapeHtml(lines[lines.length - 2])}<br/>${escapeHtml(lines[lines.length - 1])}</p></main></body></html>`;
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(subject)}</title></head><body style="margin:0;background:#f8f9f4;color:#263b2c;font:16px/1.7 Arial,sans-serif"><main style="max-width:760px;margin:24px auto;padding:24px;background:#fff;border:1px solid #e2e7dc;border-top:4px solid #0e5403;border-radius:10px"><h1 style="font-size:26px;color:#173c2a">Reflection Room</h1><pre style="font:inherit;white-space:pre-wrap;overflow-wrap:anywhere">${escapeHtml(summary)}</pre><h2 style="font-size:20px">Student records for review</h2><p>Complete weekly list: ${counted(tables.studentCount, "student")} with sessions this week, ordered by initial session days, recorded absences and initial sessions.</p>${studentTable}<h2 style="font-size:20px">Teacher assignment overview</h2>${teacherTable}<p>Review the complete records in the <a style="color:#0e5403" href="${escapeHtml(dashboardUrl)}">secure insights dashboard</a>.</p><p>Kind regards,<br/>Reflection Room | London Academy</p><p style="font-size:13px;color:#617054">${escapeHtml(lines[lines.length - 2])}<br/>${escapeHtml(lines[lines.length - 1])}</p></main></body></html>`;
   return { weekKey: period.start, period, metrics, patterns, tables, dashboardUrl, subject, text, html };
 }

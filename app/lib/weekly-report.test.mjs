@@ -115,8 +115,33 @@ test("named student tables include every weekly student, rank separate referral 
   assert.doesNotMatch(report.html, /<img src=x/);
   assert.equal(report.tables.teachers[0].students, 12);
   assert.match(report.html, /Teacher assignment overview/);
-  assert.match(report.html, /All 12 students with sessions this week/);
+  assert.match(report.html, /Complete weekly list: 12 students with sessions this week/);
   assert.doesNotMatch(report.text, /up to 10/);
+});
+
+test("standalone email declares UTF-8 and uses singular grammar without changing counts", () => {
+  const assignment = row("single-session", "pupil-1", "2026-11-02", "absent", { studentName: "Élève Exemple", teacherName: "François Example", reasonRecorded: false });
+  const single = pure.buildWeeklyReport([assignment], { now: friday, appUrl: safeEnv.WEEKLY_REPORT_APP_URL });
+  assert.match(single.html, /<head><meta charset="utf-8">/);
+  assert.match(single.html, /<meta name="viewport" content="width=device-width, initial-scale=1">/);
+  assert.match(single.html, /<title>Reflection Room — Weekly behaviour insights/);
+  assert.match(single.html, /Élève Exemple/);
+  assert.match(single.html, /François Example/);
+  assert.match(single.text, /1 staff member assigned 1 initial session; 0 follow-ups were scheduled separately/);
+  assert.match(single.text, /1 missed session still needs a follow-up/);
+  assert.match(single.text, /1 initial session has no reason recorded/);
+  assert.match(single.html, /Complete weekly list: 1 student with sessions/);
+  const repeated = pure.buildWeeklyReport([
+    assignment, row("another-day", "pupil-1", "2026-11-03", "absent"),
+    row("follow-up", "pupil-1", "2026-11-04", "present", { rescheduledFromId: assignment.id }),
+  ], { now: friday, appUrl: safeEnv.WEEKLY_REPORT_APP_URL });
+  assert.match(repeated.text, /1 student had initial reflections scheduled on two or more separate days/);
+  assert.match(repeated.text, /1 student missed two or more recorded sessions/);
+  assert.match(repeated.text, /1 follow-up was scheduled separately/);
+  assert.match(repeated.text, /check-ins for the 1 student with initial reflections/);
+  assert.equal(repeated.metrics.initial, 2);
+  assert.equal(repeated.metrics.followUps, 1);
+  assert.doesNotMatch(single.text + repeated.text, /\b1 (students|initial sessions|missed sessions|follow-ups|staff members)\b/);
 });
 
 test("readiness is disabled by default, accepts explicitly configured external domains and never reveals secrets", () => {
