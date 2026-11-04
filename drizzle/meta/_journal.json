@@ -50,6 +50,13 @@
       "when": 1792756274297,
       "tag": "0006_moderator_access",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1793810105004,
+      "tag": "0007_weekly_report_deliveries",
+      "breakpoints": true
     }
   ]
 }

@@ -1,0 +1,87 @@
+{
+  "campus": "London Academy, Casablanca",
+  "academicYear": "2026–2027",
+  "startDate": "2026-09-01",
+  "endDate": "2027-06-30",
+  "closedWeekdays": [
+    0,
+    6
+  ],
+  "closures": [
+    {
+      "start": "2026-09-18",
+      "end": "2026-09-19",
+      "label": "Baseline Assessment PTCs (no classes)"
+    },
+    {
+      "start": "2026-10-26",
+      "end": "2026-11-01",
+      "label": "Half Term Break"
+    },
+    {
+      "start": "2026-11-06",
+      "end": "2026-11-06",
+      "label": "Green March Day"
+    },
+    {
+      "start": "2026-11-18",
+      "end": "2026-11-18",
+      "label": "Independence Day"
+    },
+    {
+      "start": "2026-12-18",
+      "end": "2026-12-19",
+      "label": "Term 1 PTCs (no classes)"
+    },
+    {
+      "start": "2026-12-21",
+      "end": "2027-01-03",
+      "label": "Winter Break"
+    },
+    {
+      "start": "2027-01-14",
+      "end": "2027-01-14",
+      "label": "Amazigh New Year"
+    },
+    {
+      "start": "2027-02-15",
+      "end": "2027-02-21",
+      "label": "Half Term Break"
+    },
+    {
+      "start": "2027-03-10",
+      "end": "2027-03-11",
+      "label": "Eid Al Fitr* (TBC)"
+    },
+    {
+      "start": "2027-03-25",
+      "end": "2027-03-26",
+      "label": "Term 2 PTCs (no classes)"
+    },
+    {
+      "start": "2027-03-29",
+      "end": "2027-04-11",
+      "label": "Spring Break (Easter)"
+    },
+    {
+      "start": "2027-05-17",
+      "end": "2027-05-18",
+      "label": "Eid Al Adha* (TBC)"
+    },
+    {
+      "start": "2027-06-06",
+      "end": "2027-06-06",
+      "label": "Islamic New Year* (TBC)"
+    }
+  ],
+  "source": {
+    "url": "https://web.toddleapp.com/platform/181212821558666750/courses/my-calendar",
+    "verifiedAt": "2026-11-04",
+    "filters": [
+      "School Closures",
+      "School events"
+    ],
+    "coverage": "Reviewed calendar window: September 2026 through June 2027. Dates marked TBC in Toddle remain provisional.",
+    "selection": "Explicit school closures, no-class PTCs, named holidays and school breaks. Assessment weeks, term starts and other school events are not closures."
+  }
+}

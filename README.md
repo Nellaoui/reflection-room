@@ -24,6 +24,8 @@ Run `npm run db:migrate` to inspect the database, then `npm run db:migrate -- --
 
 The first verified login by `t-wiam-zahri@elitelac.com` creates the initial administrator. Every other verified `@elitelac.com` Google account is added automatically as a Teacher the first time it signs in. Administrators can still add accounts ahead of time, change roles to Moderator or Admin, and disable or delete accounts in User management; disabled or deleted accounts stay blocked.
 
+Weekly insight emails stay disabled until the draft, recipients and verified sender are approved. See [weekly report setup](docs/weekly-reports.md).
+
 ## Checks
 
 `npm test` and `npm run build`.
