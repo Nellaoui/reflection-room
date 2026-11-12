@@ -11,7 +11,7 @@ const ts = require("typescript");
 const projectRoot = fileURLToPath(new URL("../../", import.meta.url));
 const ownerTemplate = { authSource: "google", memberId: "owner-member-id", userId: "google:owner-auth-id", email: "owner@elitelac.com", displayName: "School Administrator", fullName: null };
 const teacherTemplate = { authSource: "google", userId: "google:teacher-auth-id", email: "teacher@elitelac.com", displayName: "Untrusted Profile Name", fullName: null };
-const behaviourSteps = { chance: true, choice: true, consequence: true };
+const behaviourSteps = { chance: true, choice: true, consequence: true, none: false };
 // Deterministic source-calendar boundary for route tests. The actual closure
 // selection remains in the shared production calendar module.
 const testSchoolCalendar = {
@@ -474,22 +474,37 @@ test("new reflection submissions reject absent, blank and invalid reasons withou
   } finally { h.close(); }
 });
 
-test("new bookings require behaviour confirmation and record it in the assignment audit", async () => {
+test("new bookings require a behaviour selection and record the selected options", async () => {
   const h = await harness();
   try {
     const { pupil } = await missedFixture(h);
     const before = h.sqlite.prepare("SELECT count(*) AS n FROM reflection_assignments").get().n;
     const input = { studentIds: [pupil.id], date: "2026-10-26", slots: ["lunch"], reason: "Fixture reason" };
-    for (const steps of [undefined, { ...behaviourSteps, choice: false }, { ...behaviourSteps, consequence: "true" }]) {
+    const noSteps = { chance: false, choice: false, consequence: false, none: false };
+    for (const [steps, message] of [
+      [undefined, /Select at least one behaviour step/],
+      [noSteps, /Select at least one behaviour step/],
+      [{ ...behaviourSteps, consequence: "true" }, /Select at least one behaviour step/],
+      [{ ...noSteps, chance: true, none: true }, /Select None of the above on its own/],
+    ]) {
       const result = await h.call("assignments", "POST", { ...input, behaviourSteps: steps });
       assert.equal(result.status, 400);
-      assert.match(result.data.error, /Confirm that Chance, Choice and Consequence/);
+      assert.match(result.data.error, message);
     }
     assert.equal(h.sqlite.prepare("SELECT count(*) AS n FROM reflection_assignments").get().n, before);
     assert.equal(h.sqlite.prepare("SELECT count(*) AS n FROM activity_events WHERE action = 'reflection.assigned'").get().n, 0);
-    assert.equal((await h.call("assignments", "POST", { ...input, behaviourSteps })).status, 200);
-    assert.match(h.sqlite.prepare("SELECT details FROM activity_events WHERE action = 'reflection.assigned'").get().details,
-      /Chance, Choice and Consequence confirmed/);
+    const selections = [
+      ["2026-10-22", { ...noSteps, choice: true }, "Choice"],
+      ["2026-10-26", { ...noSteps, none: true }, "None of the above"],
+      ["2026-10-29", { ...behaviourSteps, choice: false }, "Chance, Consequence"],
+      ["2026-11-02", { chance: true, choice: true, consequence: true }, "Chance, Choice, Consequence"],
+    ];
+    for (const [date, steps] of selections) {
+      assert.equal((await h.call("assignments", "POST", { ...input, date, behaviourSteps: steps })).status, 200);
+    }
+    const events = h.sqlite.prepare("SELECT details FROM activity_events WHERE action = 'reflection.assigned' ORDER BY details").all();
+    assert.deepEqual(events.map(event => event.details),
+      selections.map(([date, , labels]) => `${date} · Lunch break · Behaviour steps: ${labels}`));
   } finally { h.close(); }
 });
 
