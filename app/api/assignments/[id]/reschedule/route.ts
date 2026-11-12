@@ -6,6 +6,7 @@ import { isUniqueConstraintError } from "@/app/lib/reflection-errors";
 import { rescheduleInput, validId } from "@/app/lib/reflection-validation";
 import { activityStatement, sessionLabel } from "@/app/lib/reflection-activity";
 import { schoolDayClosure } from "@/app/lib/school-calendar";
+import { activeExtraFollowUpExists } from "@/app/lib/follow-up-links";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -49,6 +50,7 @@ export async function POST(request: Request, context: RouteContext) {
             SELECT 1 FROM reflection_assignments replacement
             WHERE replacement.rescheduled_from_id = original.id AND replacement.cancelled_at IS NULL
           )
+          AND NOT ${activeExtraFollowUpExists(sourceId)}
       `).returning({ id: reflectionAssignments.id }), activityStatement(user, {
         action: "reflection.rescheduled", targetType: "reflection", targetId: id,
         targetName: sql`(SELECT pupil.name FROM reflection_assignments reflection INNER JOIN students pupil ON pupil.id = reflection.student_id WHERE reflection.id = ${id})`,

@@ -1,20 +1,25 @@
 import { setTimeout } from "node:timers/promises";
 import type { InStatement, Transaction } from "@libsql/client";
 import type { getDb } from "@/db";
+import { automaticExtraFollowUpAction, automaticFollowUpAction } from "@/app/lib/follow-up-links";
 import { sessionLabel } from "@/app/lib/reflection-activity";
 import { ApiError } from "@/app/lib/reflection-errors";
 import type { StaffUser } from "@/app/lib/reflection-membership";
 import type { AttendanceStatus } from "@/app/lib/reflection-validation";
-import { nextSchoolDay } from "@/app/lib/school-calendar";
+import { nextSchoolDay, schoolCalendar } from "@/app/lib/school-calendar";
 import { casablancaClock } from "@/app/lib/weekly-report";
 
-export const automaticFollowUpAction = "reflection.auto_rescheduled";
+const followUpCalendar = {
+  ...schoolCalendar,
+  closedWeekdays: [...new Set([...schoolCalendar.closedWeekdays, 0, 5, 6])],
+};
 
 type FollowUp = { id: string; date: string };
 type AttendanceResult = {
   attendanceRecordedBy: string | null;
   attendanceRecordedAt: string | null;
   followUp: FollowUp | null;
+  followUps: FollowUp[];
   followUpUnavailable: "archived" | "calendar" | null;
   followUpCancelled: boolean;
 };
@@ -28,8 +33,9 @@ export function canCancelAutomaticFollowUp(
   return automatic && status === "pending" && attendanceRecordedAt === null && !hasReplacement;
 }
 
-async function availableLunch(transaction: Transaction, studentId: string, sourceDate: string, today: string) {
-  let date = sourceDate < today ? nextSchoolDay(today, 1, true) : nextSchoolDay(sourceDate);
+async function availableLunches(transaction: Transaction, studentId: string, sourceDate: string, today: string) {
+  const afterDate = sourceDate < today ? today : sourceDate;
+  let date = nextSchoolDay(afterDate, 1, false, followUpCalendar);
   if (!date) return null;
 
   const { rows } = await transaction.execute({
@@ -38,8 +44,43 @@ async function availableLunch(transaction: Transaction, studentId: string, sourc
     args: [studentId, date],
   });
   const occupied = new Set(rows.map(row => String(row.date)));
-  while (date && occupied.has(date)) date = nextSchoolDay(date);
-  return date;
+  const dates: string[] = [];
+  while (date) {
+    if (!occupied.has(date)) {
+      dates.push(date);
+      if (dates.length === 2) return dates;
+    }
+    date = nextSchoolDay(date, 1, false, followUpCalendar);
+  }
+  return null;
+}
+
+async function activeFollowUps(transaction: Transaction, sourceId: string, studentId: string) {
+  const { rows } = await transaction.execute({
+    sql: `WITH extra_links AS (
+            SELECT DISTINCT target_id,
+              CASE WHEN json_valid(details) THEN json_extract(details, '$.sourceId') END AS source_id
+            FROM activity_events
+            WHERE action = ? AND target_type = 'reflection'
+          )
+          SELECT child.id, child.date, child.status, child.attendance_recorded_at,
+                 extra.target_id IS NOT NULL OR EXISTS (
+                   SELECT 1 FROM activity_events event WHERE event.target_id = child.id AND event.action = ?
+                 ) AS automatic,
+                 EXISTS (
+                   SELECT 1 FROM reflection_assignments later
+                   LEFT JOIN extra_links link ON link.target_id = later.id
+                   WHERE later.cancelled_at IS NULL
+                     AND (later.rescheduled_from_id = child.id OR link.source_id = child.id)
+                 ) AS replaced
+          FROM reflection_assignments child
+          LEFT JOIN extra_links extra ON extra.target_id = child.id AND child.rescheduled_from_id IS NULL
+          WHERE child.cancelled_at IS NULL AND child.student_id = ?
+            AND (child.rescheduled_from_id = ? OR extra.source_id = ?)
+          ORDER BY child.date, child.id`,
+    args: [automaticExtraFollowUpAction, automaticFollowUpAction, studentId, sourceId, sourceId],
+  });
+  return rows;
 }
 
 function audit(user: StaffUser, action: string, id: string, studentName: string, details: string, timestamp: string): InStatement {
@@ -87,45 +128,44 @@ async function saveAttendance(
     const { rows: [source] } = await transaction.execute({
       sql: `SELECT source.student_id, source.date, source.slot, source.status, source.reason,
                    source.assigned_by, source.created_by_user_id, source.attendance_recorded_at,
-                   source.attendance_recorded_by, pupil.name AS student_name, pupil.active AS student_active,
-                   child.id AS child_id, child.date AS child_date, child.status AS child_status,
-                   child.attendance_recorded_at AS child_attendance_recorded_at,
-                   EXISTS (SELECT 1 FROM activity_events event
-                           WHERE event.target_id = child.id AND event.action = ?) AS child_automatic,
-                   EXISTS (SELECT 1 FROM reflection_assignments later
-                           WHERE later.rescheduled_from_id = child.id AND later.cancelled_at IS NULL) AS child_replaced
+                   source.attendance_recorded_by, pupil.name AS student_name, pupil.active AS student_active
             FROM reflection_assignments source
             INNER JOIN students pupil ON pupil.id = source.student_id
-            LEFT JOIN reflection_assignments child ON child.rescheduled_from_id = source.id AND child.cancelled_at IS NULL
             WHERE source.id = ? AND source.cancelled_at IS NULL`,
-      args: [automaticFollowUpAction, id],
+      args: [id],
     });
     if (!source) throw new ApiError(404, "This reflection session could not be found. Refresh the register.");
 
     const studentName = String(source.student_name);
     const sourceDate = String(source.date);
     const sourceDetails = `${sourceDate} · ${sessionLabel(source.slot === "morning" ? "morning" : "lunch")}`;
-    const childId = source.child_id === null ? null : String(source.child_id);
+    const children = await activeFollowUps(transaction, id, String(source.student_id));
     const recordedAt = now.toISOString();
     const statements: InStatement[] = [];
     const result: AttendanceResult = {
       attendanceRecordedBy: source.attendance_recorded_by === null ? null : String(source.attendance_recorded_by),
       attendanceRecordedAt: source.attendance_recorded_at === null ? null : String(source.attendance_recorded_at),
       followUp: null,
+      followUps: [],
       followUpUnavailable: null,
       followUpCancelled: false,
     };
 
-    if (childId && status !== "absent") {
-      if (!canCancelAutomaticFollowUp(Boolean(source.child_automatic), source.child_status, source.child_attendance_recorded_at, Boolean(source.child_replaced))) {
-        throw new ApiError(409, "Cancel the replacement session before changing its original missed reflection.");
+    if (children.length && status !== "absent") {
+      if (children.some(child => !canCancelAutomaticFollowUp(
+        Boolean(child.automatic), child.status, child.attendance_recorded_at, Boolean(child.replaced),
+      ))) {
+        throw new ApiError(409, "Cancel the replacement sessions before changing their original missed reflection.");
       }
-      statements.push({
-        sql: `UPDATE reflection_assignments SET cancelled_at = ?, cancelled_by_user_id = ?, updated_at = ?, updated_by_user_id = ?
-              WHERE id = ?`,
-        args: [recordedAt, user.userId, recordedAt, user.userId, childId],
-      }, audit(user, "reflection.cancelled", childId, studentName,
-        `Attendance corrected · ${source.child_date} · Lunch break`, recordedAt));
+      for (const child of children) {
+        const childId = String(child.id);
+        statements.push({
+          sql: `UPDATE reflection_assignments SET cancelled_at = ?, cancelled_by_user_id = ?, updated_at = ?, updated_by_user_id = ?
+                WHERE id = ?`,
+          args: [recordedAt, user.userId, recordedAt, user.userId, childId],
+        }, audit(user, "reflection.cancelled", childId, studentName,
+          `Attendance corrected · ${child.date} · Lunch break`, recordedAt));
+      }
       result.followUpCancelled = true;
     }
 
@@ -143,29 +183,36 @@ async function saveAttendance(
     }
 
     if (status === "absent") {
-      if (childId) {
-        result.followUp = { id: childId, date: String(source.child_date) };
+      if (children.length) {
+        result.followUps = children.map(child => ({ id: String(child.id), date: String(child.date) }));
       } else if (!source.student_active) {
         result.followUpUnavailable = "archived";
       } else {
-        const date = await availableLunch(transaction, String(source.student_id), sourceDate, casablancaClock(now).date);
-        if (date) {
-          const followUpId = crypto.randomUUID();
-          statements.push({
-            sql: `INSERT INTO reflection_assignments (
-                    id, student_id, date, slot, reason, assigned_by, status, created_at, updated_at,
-                    created_by_user_id, updated_by_user_id, rescheduled_from_id
-                  ) VALUES (?, ?, ?, 'lunch', ?, ?, 'pending', ?, ?, ?, ?, ?)`,
-            args: [followUpId, source.student_id, date, source.reason, source.assigned_by, recordedAt, recordedAt,
-              source.created_by_user_id, user.userId, id],
-          }, audit(user, automaticFollowUpAction, followUpId, studentName,
-            `${sourceDetails} → ${date} · Lunch break`, recordedAt));
-          result.followUp = { id: followUpId, date };
+        const dates = await availableLunches(transaction, String(source.student_id), sourceDate, casablancaClock(now).date);
+        if (dates) {
+          for (const [index, date] of dates.entries()) {
+            const followUpId = crypto.randomUUID();
+            const summary = `${sourceDetails} → ${date} · Lunch break`;
+            const extra = index === 1;
+            // The first booking owns the single direct replacement link.
+            // The extra's audit event links it to the same absence.
+            statements.push({
+              sql: `INSERT INTO reflection_assignments (
+                      id, student_id, date, slot, reason, assigned_by, status, created_at, updated_at,
+                      created_by_user_id, updated_by_user_id, rescheduled_from_id
+                    ) VALUES (?, ?, ?, 'lunch', ?, ?, 'pending', ?, ?, ?, ?, ?)`,
+              args: [followUpId, source.student_id, date, source.reason, source.assigned_by, recordedAt, recordedAt,
+                source.created_by_user_id, user.userId, extra ? null : id],
+            }, audit(user, extra ? automaticExtraFollowUpAction : automaticFollowUpAction, followUpId, studentName,
+              extra ? JSON.stringify({ sourceId: id, summary }) : summary, recordedAt));
+            result.followUps.push({ id: followUpId, date });
+          }
         } else {
           result.followUpUnavailable = "calendar";
         }
       }
     }
+    result.followUp = result.followUps[0] ?? null;
 
     if (statements.length) {
       await transaction.batch(statements);

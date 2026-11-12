@@ -18,6 +18,7 @@ export type Assignment = {
   attendanceRecordedAt?: string | null;
   rescheduledFromId?: string | null;
   rescheduledToId?: string | null;
+  rescheduledToIds?: string[];
 };
 
 export function sessionMetrics(assignments: Assignment[]) {

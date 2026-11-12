@@ -13,7 +13,7 @@ import LunchCutover from "./LunchCutover";
 import MissedReflections from "./MissedReflections";
 import InsightsPanel from "./InsightsPanel";
 import { AttendanceLegend } from "./InsightLegend";
-import StudentProfile from "./StudentProfile";
+import StudentProfile, { followUpIds } from "./StudentProfile";
 import SchoolDatePicker from "./SchoolDatePicker";
 import { isSchoolDay, nextSchoolDay, schoolDayClosure } from "@/app/lib/school-calendar";
 
@@ -33,6 +33,7 @@ type Assignment = {
   attendanceRecordedAt?: string | null;
   rescheduledFromId?: string | null;
   rescheduledToId?: string | null;
+  rescheduledToIds?: string[];
   canCorrectAttendance?: boolean;
 };
 type AppData = { students: Student[]; assignments: Assignment[]; meta?: { rosterSource?: string; rosterImportedAt?: string }; user?: { name?: string; email?: string; role?: "admin" | "teacher" | "moderator" } };
@@ -128,7 +129,7 @@ export default function ReflectionWorkspace({ portal = "default" }: { portal?: "
   const assignmentsById = useMemo(() => new Map(data.assignments.map(assignment => [assignment.id, assignment])), [data.assignments]);
   const unbookedAbsences = useMemo(() => data.assignments.filter(assignment => {
     const student = studentMap.get(assignment.studentId);
-    return student && student.active !== false && assignment.status === "absent" && !assignment.rescheduledToId;
+    return student && student.active !== false && assignment.status === "absent" && followUpIds(assignment).length === 0;
   }), [data.assignments, studentMap]);
   const studentDisplayNames = useMemo(() => {
     const groups = new Map<string, Student[]>();
@@ -189,6 +190,7 @@ export default function ReflectionWorkspace({ portal = "default" }: { portal?: "
   const profileStudent = profileStudentId ? studentMap.get(profileStudentId) : undefined;
   const rescheduleSource = rescheduleId ? data.assignments.find(assignment => assignment.id === rescheduleId) : undefined;
   const rescheduleStudent = rescheduleSource ? studentMap.get(rescheduleSource.studentId) : undefined;
+  const rescheduleHasFollowUps = rescheduleSource ? followUpIds(rescheduleSource).length > 0 : false;
   const rescheduleBlocked = rescheduleSource && data.assignments.some(assignment =>
     assignment.slot === "lunch" && assignment.studentId === rescheduleSource.studentId && assignment.date === rescheduleDate,
   );
@@ -211,7 +213,7 @@ export default function ReflectionWorkspace({ portal = "default" }: { portal?: "
     event.preventDefault();
     if (!isAdmin) return;
     if (replacementClosure) { setFormError(replacementClosure); return; }
-    if (!rescheduleSource || rescheduleSource.status !== "absent" || rescheduleSource.rescheduledToId
+    if (!rescheduleSource || rescheduleSource.status !== "absent" || rescheduleHasFollowUps
       || rescheduleBlocked || rescheduleDate < rescheduleSource.date || rescheduleStudent?.active === false) {
       setFormError("Choose an available lunch on or after the original reflection date.");
       return;
@@ -243,6 +245,7 @@ export default function ReflectionWorkspace({ portal = "default" }: { portal?: "
       skipped?: number;
       imported?: number;
       followUp?: { id: string; date: string } | null;
+      followUps?: { id: string; date: string }[];
       followUpUnavailable?: "archived" | "calendar" | null;
       followUpCancelled?: boolean;
     };
@@ -308,17 +311,20 @@ export default function ReflectionWorkspace({ portal = "default" }: { portal?: "
     try {
       const result = await api(`/api/assignments/${encodeURIComponent(id)}`, "PATCH", { status });
       await refresh();
-      if (status === "absent" && result.followUp) {
-        const lunchDate = formatDate(result.followUp.date, { weekday: "long", day: "numeric", month: "long" });
-        setToast(`Absence recorded. Follow-up lunch booked for ${lunchDate}.`);
+      const followUps = result.followUps ?? (result.followUp ? [result.followUp] : []);
+      if (status === "absent" && followUps.length > 0) {
+        const lunchDates = followUps.map(booking => formatDate(booking.date, { weekday: "long", day: "numeric", month: "long" }));
+        setToast(`Absence recorded. Follow-up ${lunchDates.length === 1 ? "lunch booked" : "lunches booked"} for ${lunchDates.join(" and ")}.`);
       } else if (result.followUpUnavailable === "archived") {
         setToast("Absence recorded. An admin can restore the student to book a follow-up.");
       } else if (result.followUpUnavailable === "calendar") {
         setToast(isAdmin
-          ? "Absence recorded. No lunch date is available. Check Follow-up needed."
-          : "Absence recorded. No lunch date is available. Ask an admin to review.");
+          ? "Absence recorded. Couldn’t find two available lunch dates. Check Follow-up needed."
+          : "Absence recorded. Couldn’t find two available lunch dates. Ask an admin to review.");
       } else {
-        setToast(result.followUpCancelled ? "Attendance updated. Pending follow-up cancelled." : "Attendance updated.");
+        const original = assignmentsById.get(id);
+        const bookingLabel = original && followUpIds(original).length === 1 ? "booking" : "bookings";
+        setToast(result.followUpCancelled ? `Attendance corrected. Pending lunch ${bookingLabel} cancelled.` : "Attendance updated.");
       }
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Could not update attendance.");
@@ -414,8 +420,14 @@ export default function ReflectionWorkspace({ portal = "default" }: { portal?: "
           </div>
         )}<div className="register-filters"><div className="search-field"><Search size={17}/><input aria-label="Search session register" placeholder="Search students…" value={query} onChange={e => setQuery(e.target.value)}/>{query && <button onClick={() => setQuery("")} aria-label="Clear search"><X size={14}/></button>}</div><select aria-label="Filter register by grade" value={grade} onChange={e => { setGrade(e.target.value); setClassFilter(""); }}><option value="">All grades</option>{grades.map(g => <option key={g}>{g}</option>)}</select><select aria-label="Filter register by class" value={classFilter} onChange={e => setClassFilter(e.target.value)}><option value="">All classes</option>{classes.map(c => <option key={c}>{c}</option>)}</select><select aria-label="Filter attendance" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option value="">All attendance</option><option value="pending">Pending</option><option value="present">Present</option><option value="absent">Absent</option></select>{view === "history" && <div className="history-date-input"><input type="date" aria-label="Filter history by date" value={historyDate} onChange={e => setHistoryDate(e.target.value)}/>{historyDate && <button className="icon-button" onClick={() => setHistoryDate("")} aria-label="Clear date filter"><X size={14}/></button>}</div>}</div>{loading ? <div className="loading-state"><LoaderCircle className="spin" size={25}/><p>Preparing your register…</p></div> : !filteredAssignments.length ? <EmptyState icon={<ClipboardCheck size={30} strokeWidth={1.35}/>} title={query || grade || classFilter || statusFilter || historyDate ? "No reflections match your filters" : view === "history" ? "A fresh start for your records" : "A clear register. A fresh start."} text={query || grade || classFilter || statusFilter || historyDate ? "Try another search or update the filters to find a reflection." : view === "history" ? "Assigned reflections will appear here, along with their attendance records." : `No lunch reflections are scheduled for ${date === todayISO() ? "today" : "this day"}.`} action={query || grade || classFilter || statusFilter || historyDate ? <button className="button secondary" onClick={() => { setQuery(""); setGrade(""); setClassFilter(""); setStatusFilter(""); setHistoryDate(""); }}>Clear filters</button> : <button className="button secondary" onClick={() => openModal("reflection")}><Plus size={16}/> Add a reflection</button>} foot={data.students.length ? "Every small reflection is an opportunity to grow." : "Start by adding your student directory."}/> : <><div className="table-scroll"><table className="register-table"><thead><tr><th>Student</th><th>Grade / Class</th>{view === "history" && <th>Date</th>}<th>Session</th><th>Assigned by</th><th>Attendance</th><th className="reason-column">Reason</th><th className="no-print"><span className="sr-only">Actions</span></th></tr></thead><tbody>{filteredAssignments.map((assignment, index) => {
           const student = studentMap.get(assignment.studentId);
-          const followUp = assignment.rescheduledToId ? assignmentsById.get(assignment.rescheduledToId) : undefined;
-          const attendanceLocked = !!assignment.rescheduledToId && assignment.canCorrectAttendance !== true;
+          const linkedIds = followUpIds(assignment);
+          const followUpDates = linkedIds.flatMap(id => {
+            const booking = assignmentsById.get(id);
+            return booking ? [formatDate(booking.date, { weekday: "short", day: "numeric", month: "short" })] : [];
+          });
+          const hasFollowUps = linkedIds.length > 0;
+          const followUpLabel = linkedIds.length === 1 ? "Follow-up" : "Follow-ups";
+          const attendanceLocked = hasFollowUps && assignment.canCorrectAttendance !== true;
           const savingAttendance = updating.includes(assignment.id);
           return <tr key={assignment.id} className={index < (page - 1) * pageSize || index >= page * pageSize ? "off-page" : ""}>
             <td>
@@ -429,8 +441,8 @@ export default function ReflectionWorkspace({ portal = "default" }: { portal?: "
             <td>
               <span className={`slot-pill ${assignment.slot}`}>{assignment.slot === "morning" ? <Sun size={12}/> : <Utensils size={12}/>} {slotLabels[assignment.slot]}</span>
               {assignment.rescheduledFromId && <span className="reschedule-link-note">Follow-up session</span>}
-              {assignment.rescheduledToId && <span className="reschedule-link-note">
-                {followUp ? `Follow-up on ${formatDate(followUp.date, { weekday: "short", day: "numeric", month: "short" })}` : "Follow-up booked"}
+              {hasFollowUps && <span className="reschedule-link-note">
+                {followUpDates.length === linkedIds.length ? `${followUpLabel} on ${followUpDates.join(" and ")}` : `${followUpLabel} booked`}
               </span>}
             </td>
             <td className="assigned-cell">{assignment.assignedBy || "—"}</td>
@@ -440,7 +452,7 @@ export default function ReflectionWorkspace({ portal = "default" }: { portal?: "
                 <select
                   aria-label={`Attendance for ${student?.name || "student"}, ${slotLabels[assignment.slot]}`}
                   disabled={savingAttendance || attendanceLocked}
-                  title={attendanceLocked ? "Review the linked follow-up in Reflection history." : undefined}
+                  title={attendanceLocked ? "Review the linked bookings in Reflection history." : undefined}
                   value={assignment.status}
                   onChange={event => void markAttendance(assignment.id, event.target.value as Attendance)}
                 >
@@ -452,7 +464,7 @@ export default function ReflectionWorkspace({ portal = "default" }: { portal?: "
             </td>
             <td className="reason-column reason-cell" title={assignment.reason}>{assignment.reason || "—"}</td>
             <td className="no-print">
-              <button className="row-remove" disabled={!!assignment.rescheduledToId} title={assignment.rescheduledToId ? "Remove the linked replacement before removing this original session." : "Remove reflection"} aria-label={`Remove reflection for ${student?.name || "student"}`} onClick={() => setDeleteId(assignment.id)}><Trash2 size={15}/></button>
+              <button className="row-remove" disabled={hasFollowUps} title={hasFollowUps ? "Remove linked follow-up bookings before removing this original session." : "Remove reflection"} aria-label={`Remove reflection for ${student?.name || "student"}`} onClick={() => setDeleteId(assignment.id)}><Trash2 size={15}/></button>
             </td>
           </tr>;
         })}</tbody></table></div><div className="table-pagination"><span>Showing <strong>{(page - 1) * pageSize + 1}–{Math.min(page * pageSize, filteredAssignments.length)}</strong> of {filteredAssignments.length} reflections</span><div><button className="icon-button" aria-label="Previous page" disabled={page <= 1} onClick={() => changePage(page - 1)}><ChevronLeft size={16}/></button><span>{page} / {pageCount}</span><button className="icon-button" aria-label="Next page" disabled={page >= pageCount} onClick={() => changePage(page + 1)}><ChevronRight size={16}/></button></div></div></>}</section>}
@@ -474,11 +486,11 @@ export default function ReflectionWorkspace({ portal = "default" }: { portal?: "
             <strong>Lunch already booked on this date</strong>
             <p>Choose another school day.</p>
           </div>
-        )}{bookingRefreshing && <p className="booking-check"><LoaderCircle size={13} className="spin"/>Checking the latest bookings…</p>}{bookingLoadError && <div className="booking-warning"><p>{bookingLoadError}</p><button type="button" className="text-button" onClick={refreshBookings}>Check bookings again</button></div>}{rescheduleSource.rescheduledToId && <p className="form-error" role="alert">This absence already has a replacement session. Open the student’s history to review it.</p>}{rescheduleStudent?.active === false && <p className="form-error" role="alert">An admin must restore this student before rescheduling.</p>}{formError && <p className="form-error" role="alert">{formError}</p>}</div><div className="modal-footer"><span><ShieldCheck size={14}/>Original absence retained</span><div><button className="button secondary" type="button" disabled={saving} onClick={() => setRescheduleId(null)}>Cancel</button><button className="button primary" type="submit" disabled={saving || bookingRefreshing || !!bookingLoadError || !rescheduleDate || rescheduleDate < rescheduleSource.date || !!replacementClosure || rescheduleBlocked || !!rescheduleSource.rescheduledToId || rescheduleStudent?.active === false}>{saving ? <LoaderCircle size={15} className="spin"/> : <CalendarClock size={15}/>}Reschedule</button></div></div></form></Modal>}
+        )}{bookingRefreshing && <p className="booking-check"><LoaderCircle size={13} className="spin"/>Checking the latest bookings…</p>}{bookingLoadError && <div className="booking-warning"><p>{bookingLoadError}</p><button type="button" className="text-button" onClick={refreshBookings}>Check bookings again</button></div>}{rescheduleHasFollowUps && <p className="form-error" role="alert">This absence already has a follow-up booking. Open the student’s history to review it.</p>}{rescheduleStudent?.active === false && <p className="form-error" role="alert">An admin must restore this student before rescheduling.</p>}{formError && <p className="form-error" role="alert">{formError}</p>}</div><div className="modal-footer"><span><ShieldCheck size={14}/>Original absence retained</span><div><button className="button secondary" type="button" disabled={saving} onClick={() => setRescheduleId(null)}>Cancel</button><button className="button primary" type="submit" disabled={saving || bookingRefreshing || !!bookingLoadError || !rescheduleDate || rescheduleDate < rescheduleSource.date || !!replacementClosure || rescheduleBlocked || rescheduleHasFollowUps || rescheduleStudent?.active === false}>{saving ? <LoaderCircle size={15} className="spin"/> : <CalendarClock size={15}/>}Reschedule</button></div></div></form></Modal>}
     {profileStudent && !accessError && <StudentProfile student={{ ...profileStudent, name: studentLabel(profileStudent) }} assignments={data.assignments} mode={isAdmin ? "full" : "history"} onClose={() => setProfileStudentId(null)}/>}
     {isAdmin && (modal === "student" || modal === "edit-student") && <Modal title={editingStudent ? "Edit student details" : "Add a student"} subtitle={editingStudent ? "Keep your school directory up to date." : "Add a student to your school directory."} onClose={closeModal}><form onSubmit={saveStudentForm}><div className="modal-body"><div className="form-field"><label className="form-label" htmlFor="new-student-name">Full name</label><input id="new-student-name" required maxLength={120} placeholder="Student’s full name" value={newName} onChange={e => setNewName(e.target.value)}/></div><div className="form-row"><div className="form-field"><label className="form-label" htmlFor="new-student-grade">Grade / Year</label><input id="new-student-grade" required maxLength={40} list="grade-options" placeholder="e.g. Year 7" value={newGrade} onChange={e => setNewGrade(e.target.value)}/><datalist id="grade-options">{grades.map(g => <option key={g} value={g}/>)}</datalist></div><div className="form-field"><label className="form-label" htmlFor="new-student-class">Class</label><input id="new-student-class" required maxLength={60} placeholder="e.g. 7A" value={newClass} onChange={e => setNewClass(e.target.value)}/></div></div><p className="form-hint"><Users size={16}/>The student will be available to all teachers using this workspace.</p>{formError && <p className="form-error" role="alert">{formError}</p>}</div><div className="modal-footer"><div/><div><button className="button secondary" type="button" disabled={saving} onClick={closeModal}>Cancel</button><button className="button primary" type="submit" disabled={saving || !newName.trim() || !newGrade.trim() || !newClass.trim()}>{saving ? <LoaderCircle className="spin" size={16}/> : editingStudent ? <Check size={16}/> : <Plus size={16}/>} {editingStudent ? "Save changes" : "Add student"}</button></div></div></form></Modal>}
     {isAdmin && modal === "import" && <Modal title="Import student directory" subtitle="Bring your school roster into one shared directory." onClose={closeModal} wide><div className="modal-body"><div className="import-instructions"><FileText size={21}/><div><strong>A simple CSV file is all you need</strong><p>Include the columns <b>Name</b>, <b>Grade</b> and <b>Class</b>. Existing students are matched by their name, grade and class.</p><button className="text-button" onClick={() => downloadCsv("student-directory-template.csv", [["Name", "Grade", "Class"]])}><ArrowDownToLine size={14}/>Download CSV template</button></div></div><label className="file-drop"><Upload size={24}/><strong>{fileName || "Choose a CSV file"}</strong><span>or paste your CSV below · .csv, .tsv or .txt</span><input type="file" accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values,text/plain" aria-label="Choose student CSV file" onChange={async e => { const file = e.target.files?.[0]; if (!file) return; if (file.size > 5 * 1024 * 1024) { setFormError("Please choose a file smaller than 5 MB."); return; } try { const text = await file.text(); setCsvText(text); setFileName(file.name); setImportPreview([]); setFormError(""); } catch { setFormError("This file could not be read. Please try another CSV."); } }}/></label><div className="form-field"><label className="form-label" htmlFor="csv-data">CSV data</label><textarea id="csv-data" className="csv-textarea" rows={4} value={csvText} placeholder={'Name,Grade,Class\n'} onChange={e => { setCsvText(e.target.value); setImportPreview([]); }}/></div>{formError && <p className="form-error" role="alert">{formError}</p>}{importPreview.length > 0 && <div className="import-preview"><div><Check size={16}/><strong>{importPreview.length} students ready to import</strong></div><table><thead><tr><th>Name</th><th>Grade</th><th>Class</th></tr></thead><tbody>{importPreview.slice(0, 5).map((s, i) => <tr key={i}><td>{s.name}</td><td>{s.grade}</td><td>{s.className}</td></tr>)}</tbody></table>{importPreview.length > 5 && <p>…and {importPreview.length - 5} more students</p>}</div>}</div><div className="modal-footer"><span><ShieldCheck size={14}/>Review before importing</span><div><button className="button secondary" disabled={saving} onClick={closeModal}>Cancel</button>{importPreview.length ? <button className="button primary" disabled={saving} onClick={() => saveStudents(importPreview, importPreview.some(student => student.toddleId) ? "Toddle roster import" : "CSV import")}>{saving ? <LoaderCircle className="spin" size={16}/> : <Upload size={16}/>}Import {importPreview.length} students</button> : <button className="button primary" disabled={!csvText.trim()} onClick={previewImport}>Preview import <ArrowRight size={16}/></button>}</div></div></Modal>}
-    {modal === "help" && <Modal title="A shared space for reflection" subtitle="A simple guide for your school team." onClose={closeModal}><div className="modal-body guidance"><div><span>01</span><div><h3>Find the right student</h3><p>Browse the directory by grade and class. Admins manage students and staff access; teachers assign reflections and take attendance. This workspace is for staff only.</p></div></div><div><span>02</span><div><h3>Book a lunch reflection</h3><p>Choose a school day and enter the reason. Reflections take place in the Music Room on the canteen floor during lunch. Each student can attend one reflection per day.</p></div></div><div><span>03</span><div><h3>Record who attended</h3><p>The covering teacher marks each expected student Present or Absent. The register records the staff member and time. Pending means attendance has not been recorded.</p></div></div><div><span>04</span><div><h3>Follow up a missed session</h3><p>Marking a student Absent books the next available school-day lunch. Admins can review any unbooked absences under Follow-up needed.</p></div></div><div><span>05</span><div><h3>Understand each student’s history</h3><p>Open a student’s name to review their full reflection history. Admins and moderators can also compare Student insights and Teacher insights.</p></div></div><p className="staff-access-help"><ShieldCheck size={15}/>Staff sign in with an authorised school Google Workspace account. An administrator manages staff access.</p></div><div className="modal-footer"><span>Pause. Reflect. Grow.</span><button className="button primary" onClick={closeModal}>Got it <Check size={16}/></button></div></Modal>}
+    {modal === "help" && <Modal title="A shared space for reflection" subtitle="A simple guide for your school team." onClose={closeModal}><div className="modal-body guidance"><div><span>01</span><div><h3>Find the right student</h3><p>Browse the directory by grade and class. Admins manage students and staff access; teachers assign reflections and take attendance. This workspace is for staff only.</p></div></div><div><span>02</span><div><h3>Book a lunch reflection</h3><p>Choose a school day and enter the reason. Reflections take place in the Music Room on the canteen floor during lunch. Each student can attend one reflection per day.</p></div></div><div><span>03</span><div><h3>Record who attended</h3><p>The covering teacher marks each expected student Present or Absent. The register records the staff member and time. Pending means attendance has not been recorded.</p></div></div><div><span>04</span><div><h3>Follow up a missed session</h3><p>Marking a student Absent books two lunches on separate available school days, Monday through Thursday. Admins can review unbooked absences under Follow-up needed.</p></div></div><div><span>05</span><div><h3>Understand each student’s history</h3><p>Open a student’s name to review their full reflection history. Admins and moderators can also compare Student insights and Teacher insights.</p></div></div><p className="staff-access-help"><ShieldCheck size={15}/>Staff sign in with an authorised school Google Workspace account. An administrator manages staff access.</p></div><div className="modal-footer"><span>Pause. Reflect. Grow.</span><button className="button primary" onClick={closeModal}>Got it <Check size={16}/></button></div></Modal>}
 
     {deleteId && <Modal title="Remove this reflection?" subtitle="This session will be removed from the student’s register." onClose={() => { if (!saving) setDeleteId(null); }}><div className="modal-body"><p className="delete-note">The student will no longer be expected at this reflection session. You can assign it again later if needed.</p></div><div className="modal-footer"><div/><div><button className="button secondary" disabled={saving} onClick={() => setDeleteId(null)}>Keep reflection</button><button className="button danger" disabled={saving} onClick={removeAssignment}>{saving ? <LoaderCircle className="spin" size={16}/> : <Trash2 size={16}/>}Remove reflection</button></div></div></Modal>}
   </div>;
