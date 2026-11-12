@@ -220,7 +220,7 @@ export function buildWeeklyReport(assignments: ReportAssignment[], { now = new D
     ...(tables.teachers.length ? tables.teachers.map(teacher => `${teacher.name} | Initial: ${teacher.initial}; students: ${teacher.students}; follow-ups: ${teacher.followUps} | Present: ${teacher.present}; absent: ${teacher.absent}; pending: ${teacher.pending}`) : ["No teacher assignment activity recorded this week."]), "",
     "Review the complete student and teacher records in the secure insights dashboard:", dashboardUrl, "",
     "Kind regards,", "Reflection Room | London Academy", "",
-    `Period: ${period.label}. Both breaks count separately. Follow-ups are separate from initial sessions.`,
+    `Period: ${period.label}. Each booking counts as one session. Follow-ups are separate from initial sessions.`,
     "Pending sessions are not counted as absences. Missed sessions awaiting follow-up are this week’s absences without an active replacement. Counts describe sessions, not incidents or judgements about students or teachers. Attendance outcomes belong to the sessions assigned; they do not identify who supervised them.",
   ];
   const text = lines.join("\n");

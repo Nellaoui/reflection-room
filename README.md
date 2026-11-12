@@ -1,6 +1,6 @@
 # Reflection Room · London Academy
 
-A staff workspace for morning and lunch break reflections, attendance, missed sessions and student history.
+A staff workspace for lunch break reflections in the Music Room on the canteen floor, with attendance, missed sessions and student history.
 
 - One Google sign-in for `@elitelac.com` staff. Any verified school Google account joins as a Teacher on first sign-in.
 - Admins can switch between Admin, Teacher and Moderator views.

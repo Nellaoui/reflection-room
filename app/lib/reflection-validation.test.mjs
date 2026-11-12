@@ -10,15 +10,15 @@ test("generic calendar dates reject rollovers without restricting history date f
   }
 });
 
-test("a student can receive both sessions and repeated IDs are deduplicated", () => {
-  assert.deepEqual(assignmentInput({ studentIds: ["pupil-1", "pupil-1"], slots: ["morning", "lunch"], date: "2026-10-22", reason: "  Disruption\n during\tclass.  ", assignedBy: "" }, "A Teacher"), {
-    studentIds: ["pupil-1"], slots: ["morning", "lunch"], date: "2026-10-22", reason: "Disruption during class.", assignedBy: "A Teacher",
+test("a student can receive lunch reflection and repeated IDs are deduplicated", () => {
+  assert.deepEqual(assignmentInput({ studentIds: ["pupil-1", "pupil-1"], slots: ["lunch"], date: "2026-10-22", reason: "  Disruption\n during\tclass.  ", assignedBy: "" }, "A Teacher"), {
+    studentIds: ["pupil-1"], slot: "lunch", date: "2026-10-22", reason: "Disruption during class.", assignedBy: "A Teacher",
   });
-  assert.throws(() => assignmentInput({ studentIds: ["pupil-1"], slots: ["afternoon"], date: "2026-10-22" }, "Teacher"));
+  assert.throws(() => assignmentInput({ studentIds: ["pupil-1"], slots: ["afternoon"], date: "2026-10-22", reason: "Disruption during class." }, "Teacher"), /lunch break only/);
 });
 
 test("new assignments require a visible nonblank reason with the existing length limit", () => {
-  const input = { studentIds: ["pupil-1"], slots: ["morning"], date: "2026-10-22" };
+  const input = { studentIds: ["pupil-1"], slots: ["lunch"], date: "2026-10-22" };
   for (const reason of [undefined, null, "", " \t\n ", "\u00a0\u3000", "\u200b\u200c\u2060"]) {
     assert.throws(() => assignmentInput({ ...input, reason }, "Teacher"), /Reason is required/);
   }
