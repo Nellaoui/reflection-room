@@ -1,0 +1,81 @@
+.section {
+  min-inline-size: 0;
+  margin: 0 0 20px;
+  padding: 6px 13px 13px;
+  border: 1px solid #b8cba9;
+  border-radius: 8px;
+  background: #f5f8f0;
+}
+
+.section legend {
+  margin: 0;
+  padding: 0 6px;
+  color: #294726;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.hint {
+  margin: 0 0 10px;
+  color: #526748;
+  font-size: 14px;
+}
+
+.options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(0, 1.35fr);
+  gap: 8px;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  border: 1px solid #d9e4d0;
+  border-radius: 6px;
+  padding: 8px 9px;
+  background: #fff;
+  color: #354e2b;
+  font-size: 16px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.option:has(input:checked),
+.option[aria-pressed="true"] {
+  border-color: #698955;
+  background: #e8f0df;
+}
+
+.option input,
+.noneIndicator {
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.noneIndicator {
+  display: grid;
+  place-items: center;
+}
+
+.option input:focus-visible,
+.option:focus-visible {
+  outline: 2px solid #456c35;
+  outline-offset: 3px;
+}
+
+@media (max-width: 720px) {
+  .options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 400px) {
+  .options {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
