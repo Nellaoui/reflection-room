@@ -17,6 +17,7 @@ import StudentProfile, { followUpIds } from "./StudentProfile";
 import SchoolDatePicker from "./SchoolDatePicker";
 import { nextReflectionDay, nextSchoolDay, reflectionDayClosure, schoolDayClosure } from "@/app/lib/school-calendar";
 import { casablancaClock } from "@/app/lib/weekly-report";
+import behaviourStyles from "./reflection-behaviour-steps.module.css";
 
 type Student = { id: string; name: string; grade: string; className: string; active?: boolean; toddleId?: string | null };
 type Slot = "morning" | "lunch";
@@ -485,12 +486,12 @@ export default function ReflectionWorkspace({ portal = "default" }: { portal?: "
     </div>
     {toast && <div className="toast" role="status"><span><Check size={16}/></span>{toast}<button onClick={() => setToast("")} aria-label="Dismiss notification"><X size={15}/></button></div>}
     {modal === "reflection" && <Modal title="Send to reflection" subtitle={`Lunch break · ${reflectionLocation}`} onClose={closeModal} wide><form onSubmit={saveReflection}><div className="modal-body">
-        <fieldset className="behaviour-steps" disabled={saving} aria-describedby="behaviour-steps-hint">
+        <fieldset className={behaviourStyles.section} disabled={saving} aria-describedby="behaviour-steps-hint">
           <legend className="form-label">Behaviour steps <span className="required-label">Required</span></legend>
-          <p id="behaviour-steps-hint" className="behaviour-steps-hint">Select the steps you used, or choose None of the above.</p>
-          <div className="behaviour-step-options">
+          <p id="behaviour-steps-hint" className={behaviourStyles.hint}>Select the steps you used, or choose None of the above.</p>
+          <div className={behaviourStyles.options}>
             {behaviourStepLabels.map(({ step, label }) => (
-              <label className="behaviour-step-option" key={step}>
+              <label className={behaviourStyles.option} key={step}>
                 <input type="checkbox" checked={behaviourSteps[step]} onChange={event => {
                   const checked = event.currentTarget.checked;
                   setBehaviourSteps(previous => ({ ...previous, [step]: checked, none: false }));
@@ -500,11 +501,11 @@ export default function ReflectionWorkspace({ portal = "default" }: { portal?: "
             ))}
             <button
               type="button"
-              className="behaviour-step-option behaviour-step-none"
+              className={behaviourStyles.option}
               aria-pressed={behaviourSteps.none}
               onClick={() => setBehaviourSteps(previous => ({ ...unconfirmedBehaviourSteps, none: !previous.none }))}
             >
-              <Check size={17} aria-hidden="true"/>
+              <span className={behaviourStyles.noneIndicator} aria-hidden="true">{behaviourSteps.none && <Check size={17}/>}</span>
               <span>None of the above</span>
             </button>
           </div>
