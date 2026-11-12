@@ -43,6 +43,20 @@ export function validId(value: unknown): string {
   return value;
 }
 
+function behaviourStepsInput(value: unknown) {
+  const selectionRequired = "Select at least one behaviour step or None of the above.";
+  const { chance, choice, consequence, none: noneSelected } = record(value, selectionRequired);
+  // An already-open form can still submit the previous all-three confirmation.
+  const none = noneSelected === undefined && chance === true && choice === true && consequence === true ? false : noneSelected;
+  if (typeof chance !== "boolean" || typeof choice !== "boolean" || typeof consequence !== "boolean" || typeof none !== "boolean") {
+    throw new ValidationError(selectionRequired);
+  }
+  const hasSteps = chance || choice || consequence;
+  if (none && hasSteps) throw new ValidationError("Select None of the above on its own.");
+  if (!none && !hasSteps) throw new ValidationError(selectionRequired);
+  return { chance, choice, consequence, none };
+}
+
 export function assignmentInput(value: unknown, fallbackName: string) {
   const body = record(value);
   if (!Array.isArray(body.studentIds) || !body.studentIds.length || body.studentIds.length > 2000) {
@@ -55,16 +69,12 @@ export function assignmentInput(value: unknown, fallbackName: string) {
   if (body.reason === undefined || body.reason === null) throw new ValidationError("Reason is required.");
   const reason = text(body.reason, "Reason", 1000);
   if (!reason.replace(/[\p{White_Space}\p{Cf}]/gu, "")) throw new ValidationError("Reason is required.");
-  const confirmationMessage = "Confirm that Chance, Choice and Consequence were completed before assigning a reflection.";
-  const steps = record(body.behaviourSteps, confirmationMessage);
-  if (steps.chance !== true || steps.choice !== true || steps.consequence !== true) {
-    throw new ValidationError(confirmationMessage);
-  }
   return {
     studentIds,
     slot: "lunch" as const,
     date: validDate(body.date),
     reason,
+    behaviourSteps: behaviourStepsInput(body.behaviourSteps),
     // Attribution comes from active server membership. Legacy clients may still
     // send assignedBy, but it must never override the authenticated staff name.
     assignedBy: fallbackName.slice(0, 120),

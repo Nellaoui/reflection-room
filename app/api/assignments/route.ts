@@ -59,10 +59,14 @@ export async function POST(request: Request) {
 
     // Small inserts keep each prepared statement below D1's bind-parameter limit.
     const statements = chunks(rows, 7).map((group) => db.insert(reflectionAssignments).values(group).returning({ id: reflectionAssignments.id }));
+    const { chance, choice, consequence, none } = input.behaviourSteps;
+    const selectedSteps = none
+      ? "None of the above"
+      : [chance && "Chance", choice && "Choice", consequence && "Consequence"].filter(Boolean).join(", ");
     const auditStatements = chunks(rows, 10).map(group => activityRowsStatement(user, group.map(row => ({
       action: "reflection.assigned", targetType: "reflection", targetId: row.id,
       targetName: sql`(SELECT name FROM students WHERE id = ${row.studentId})`,
-      details: `${row.date} · ${sessionLabel(row.slot)} · Chance, Choice and Consequence confirmed`, createdAt: now,
+      details: `${row.date} · ${sessionLabel(row.slot)} · Behaviour steps: ${selectedSteps}`, createdAt: now,
     }))));
     // D1 batches commit together, so a failed request does not leave half a register.
     try {
