@@ -15,7 +15,8 @@ import InsightsPanel from "./InsightsPanel";
 import { AttendanceLegend } from "./InsightLegend";
 import StudentProfile, { followUpIds } from "./StudentProfile";
 import SchoolDatePicker from "./SchoolDatePicker";
-import { isSchoolDay, nextSchoolDay, schoolDayClosure } from "@/app/lib/school-calendar";
+import { nextReflectionDay, nextSchoolDay, reflectionDayClosure, schoolDayClosure } from "@/app/lib/school-calendar";
+import { casablancaClock } from "@/app/lib/weekly-report";
 
 type Student = { id: string; name: string; grade: string; className: string; active?: boolean; toddleId?: string | null };
 type Slot = "morning" | "lunch";
@@ -42,6 +43,12 @@ type ModalType = "reflection" | "student" | "edit-student" | "import" | "help" |
 type ImportStudent = { name: string; grade: string; className: string; toddleId?: string };
 const slotLabels: Record<Slot, string> = { morning: "Morning break", lunch: "Lunch break" };
 const reflectionLocation = "Music Room, canteen floor";
+const unconfirmedBehaviourSteps = { chance: false, choice: false, consequence: false };
+const behaviourStepLabels = [
+  { step: "chance", label: "Chance" },
+  { step: "choice", label: "Choice" },
+  { step: "consequence", label: "Consequence" },
+] as const;
 const adminViews: View[] = ["insights", "teacher-insights", "users", "activity", "weekly-report", "missed"];
 const collator = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
 function compareGrades(a: string, b: string): number {
@@ -61,8 +68,8 @@ function compareGrades(a: string, b: string): number {
   return collator.compare(a, b);
 }
 
-function todayISO() { const now = new Date(); return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`; }
-function defaultReflectionDate() { return nextSchoolDay(todayISO(), 1, true) || ""; }
+function todayISO() { return casablancaClock(new Date()).date; }
+function defaultReflectionDate() { return nextReflectionDay(todayISO(), true) || ""; }
 function normalizedReason(value: string) { return value.normalize("NFKC").replace(/\s+/g, " ").trim(); }
 function hasReason(value: string) { return !!normalizedReason(value).replace(/[\p{White_Space}\p{Cf}]/gu, ""); }
 function formatDate(date: string, options?: Intl.DateTimeFormatOptions) { return new Date(`${date}T12:00:00`).toLocaleDateString("en-GB", options || { weekday: "long", day: "numeric", month: "long", year: "numeric" }); }
@@ -102,7 +109,9 @@ export default function ReflectionWorkspace({ portal = "default" }: { portal?: "
   const [modal, setModal] = useState<ModalType>(null); const [mobileNav, setMobileNav] = useState(false); const [toast, setToast] = useState(""); const [saving, setSaving] = useState(false); const [formError, setFormError] = useState(""); const [updating, setUpdating] = useState<string[]>([]); const [deleteId, setDeleteId] = useState<string | null>(null);
   const [selectedStudents, setSelectedStudents] = useState<string[]>([]); const [studentQuery, setStudentQuery] = useState(""); const [studentGrade, setStudentGrade] = useState(""); const [studentClass, setStudentClass] = useState(""); const [reflectionDate, setReflectionDate] = useState(defaultReflectionDate); const [reason, setReason] = useState("");
   const [reasonTouched, setReasonTouched] = useState(false);
-  const [dateChoice, setDateChoice] = useState<"today" | "custom">(() => isSchoolDay(todayISO()) ? "today" : "custom"); const [bookingRefreshing, setBookingRefreshing] = useState(false); const [bookingLoadError, setBookingLoadError] = useState("");
+  const [behaviourSteps, setBehaviourSteps] = useState(unconfirmedBehaviourSteps);
+  const behaviourStepsConfirmed = behaviourSteps.chance && behaviourSteps.choice && behaviourSteps.consequence;
+  const [dateChoice, setDateChoice] = useState<"today" | "custom">(() => reflectionDayClosure(todayISO()) ? "custom" : "today"); const [bookingRefreshing, setBookingRefreshing] = useState(false); const [bookingLoadError, setBookingLoadError] = useState("");
   const [profileStudentId, setProfileStudentId] = useState<string | null>(null); const [rescheduleId, setRescheduleId] = useState<string | null>(null); const [rescheduleDate, setRescheduleDate] = useState(todayISO);
   const [newName, setNewName] = useState(""); const [newGrade, setNewGrade] = useState(""); const [newClass, setNewClass] = useState(""); const [csvText, setCsvText] = useState(""); const [importPreview, setImportPreview] = useState<ImportStudent[]>([]); const [fileName, setFileName] = useState("");
   const [showArchived, setShowArchived] = useState(false); const [editingStudent, setEditingStudent] = useState<Student | null>(null); const [studentBusyIds, setStudentBusyIds] = useState<string[]>([]);
@@ -152,9 +161,9 @@ export default function ReflectionWorkspace({ portal = "default" }: { portal?: "
   const classes = useMemo(() => [...new Set(data.students.filter(s => !grade || s.grade === grade).map(s => s.className))].sort(collator.compare), [data.students, grade]);
   const lunchAssignments = data.assignments.filter(assignment => assignment.date === date && assignment.slot === "lunch");
   const pendingMorningCount = data.assignments.filter(assignment => assignment.slot === "morning" && assignment.status === "pending").length;
-  const reflectionClosure = reflectionDate ? schoolDayClosure(reflectionDate) : "Choose a school day.";
-  const replacementClosure = rescheduleDate ? schoolDayClosure(rescheduleDate) : "Choose a school day.";
-  const todayClosure = schoolDayClosure(todayISO());
+  const reflectionClosure = reflectionDate ? reflectionDayClosure(reflectionDate) : "Choose an available reflection date.";
+  const replacementClosure = rescheduleDate ? reflectionDayClosure(rescheduleDate) : "Choose an available reflection date.";
+  const todayClosure = reflectionDayClosure(todayISO());
   const overviewClosure = schoolDayClosure(date);
   const previousSchoolDate = nextSchoolDay(date, -1);
   const followingSchoolDate = nextSchoolDay(date, 1);
@@ -197,14 +206,14 @@ export default function ReflectionWorkspace({ portal = "default" }: { portal?: "
   const pageSize = 12; const pageCount = Math.max(1, Math.ceil(filteredAssignments.length / pageSize)); const filterKey = JSON.stringify([query, grade, classFilter, historySlot, date, statusFilter, historyDate, view]); const page = Math.min(pageCount, pagination.key === filterKey ? pagination.page : 1);
   function changePage(next: number) { setPagination({ key: filterKey, page: Math.max(1, Math.min(pageCount, next)) }); }
   function changeView(next: View) { if (!isAdmin && adminViews.includes(next)) return; setView(next); setQuery(""); setGrade(""); setClassFilter(""); setStatusFilter(""); setHistorySlot("all"); setHistoryDate(""); setMobileNav(false); }
-  function openModal(next: ModalType, student?: Student) { if ((next === "student" || next === "edit-student" || next === "import") && !isAdmin) return; setFormError(""); if (next === "reflection") { setSelectedStudents(student ? [student.id] : []); setStudentQuery(""); setStudentGrade(""); setStudentClass(""); setReflectionDate(defaultReflectionDate()); setDateChoice(isSchoolDay(todayISO()) ? "today" : "custom"); void refreshBookings(); setReason(""); setReasonTouched(false); } if (next === "student" || next === "edit-student") { setEditingStudent(next === "edit-student" ? student || null : null); setNewName(student?.name || ""); setNewGrade(student?.grade || ""); setNewClass(student?.className || ""); } if (next === "import") { setCsvText(""); setImportPreview([]); setFileName(""); } setModal(next); }
+  function openModal(next: ModalType, student?: Student) { if ((next === "student" || next === "edit-student" || next === "import") && !isAdmin) return; setFormError(""); if (next === "reflection") { setSelectedStudents(student ? [student.id] : []); setStudentQuery(""); setStudentGrade(""); setStudentClass(""); setReflectionDate(defaultReflectionDate()); setDateChoice(todayClosure ? "custom" : "today"); void refreshBookings(); setReason(""); setReasonTouched(false); setBehaviourSteps(unconfirmedBehaviourSteps); } if (next === "student" || next === "edit-student") { setEditingStudent(next === "edit-student" ? student || null : null); setNewName(student?.name || ""); setNewGrade(student?.grade || ""); setNewClass(student?.className || ""); } if (next === "import") { setCsvText(""); setImportPreview([]); setFileName(""); } setModal(next); }
   async function refreshBookings() { setBookingRefreshing(true); setBookingLoadError(""); try { receiveWorkspace(await loadWorkspace()); } catch (error) { if (error instanceof WorkspaceLoadError && (error.status === 401 || error.status === 403)) handleWorkspaceError(error); else setBookingLoadError(error instanceof Error ? error.message : "Could not check the latest bookings."); } finally { setBookingRefreshing(false); } }
   function openReschedule(assignment: { id: string; date: string }) {
     if (!isAdmin) return;
     const today = todayISO();
     const pastSession = assignment.date < today;
     setRescheduleId(assignment.id);
-    setRescheduleDate(nextSchoolDay(pastSession ? today : assignment.date, 1, pastSession) || "");
+    setRescheduleDate(nextReflectionDay(pastSession ? today : assignment.date, pastSession) || "");
     setFormError("");
     void refreshBookings();
   }
@@ -260,6 +269,7 @@ export default function ReflectionWorkspace({ portal = "default" }: { portal?: "
     event.preventDefault();
     setReasonTouched(true);
     if (!hasReason(reason)) { setFormError("Enter a reason for this reflection."); return; }
+    if (!behaviourStepsConfirmed) { setFormError("Confirm all three behaviour steps."); return; }
     if (reflectionClosure) { setFormError(reflectionClosure); return; }
     if (!selectedStudents.length || hasBookingConflict || bookingRefreshing || bookingLoadError) {
       setFormError("Choose a date when every selected student is available at lunch.");
@@ -285,6 +295,7 @@ export default function ReflectionWorkspace({ portal = "default" }: { portal?: "
         date: reflectionDate,
         slots: ["lunch"],
         reason: normalizedReason(reason),
+        behaviourSteps,
       });
       await refresh();
       if (result.skipped) {
@@ -479,7 +490,21 @@ export default function ReflectionWorkspace({ portal = "default" }: { portal?: "
             <p>{[...new Set(bookedForSelection.map(assignment => studentLabel(studentMap.get(assignment.studentId))))].join(", ")}</p>
             <p>Choose another school day or adjust the student selection.</p>
           </div>
-        )}<div className="form-field"><label className="form-label" htmlFor="reflection-reason">Reason <span className="required-label">Required</span></label><textarea id="reflection-reason" required maxLength={1000} rows={3} placeholder="Why is this reflection being assigned?" value={reason} aria-invalid={reasonTouched && !hasReason(reason) ? true : undefined} aria-describedby={reasonTouched && !hasReason(reason) ? "reflection-reason-error" : undefined} onBlur={() => setReasonTouched(true)} onChange={e => setReason(e.target.value)}/>{reasonTouched && !hasReason(reason) && <p id="reflection-reason-error" className="form-error" role="alert">Enter a reason for this reflection.</p>}</div><div className="form-field"><label className="form-label" htmlFor="assigned-by">Assigned by <span>Automatic</span></label><input id="assigned-by" readOnly value={data.user?.name || "School staff"}/></div>{formError && <p className="form-error" role="alert">{formError}</p>}</div><div className="modal-footer"><span><ShieldCheck size={14}/>Saved to the school register</span><div><button className="button secondary" type="button" disabled={saving} onClick={closeModal}>Cancel</button><button className="button primary" type="submit" disabled={saving || bookingRefreshing || !!bookingLoadError || !selectedStudents.length || hasBookingConflict || !hasReason(reason) || !!reflectionClosure}>{saving ? <LoaderCircle size={16} className="spin"/> : <Plus size={17}/>} {saving ? "Adding…" : "Send to reflection"}</button></div></div></form></Modal>}
+        )}<div className="form-field"><label className="form-label" htmlFor="reflection-reason">Reason <span className="required-label">Required</span></label><textarea id="reflection-reason" required maxLength={1000} rows={3} placeholder="Why is this reflection being assigned?" value={reason} aria-invalid={reasonTouched && !hasReason(reason) ? true : undefined} aria-describedby={reasonTouched && !hasReason(reason) ? "reflection-reason-error" : undefined} onBlur={() => setReasonTouched(true)} onChange={e => setReason(e.target.value)}/>{reasonTouched && !hasReason(reason) && <p id="reflection-reason-error" className="form-error" role="alert">Enter a reason for this reflection.</p>}</div><fieldset className="behaviour-steps" disabled={saving} aria-describedby="behaviour-steps-hint">
+          <legend className="form-label">Behaviour steps <span className="required-label">Required</span></legend>
+          <p id="behaviour-steps-hint" className="behaviour-steps-hint">Confirm each step before assigning a reflection.</p>
+          <div className="behaviour-step-options">
+            {behaviourStepLabels.map(({ step, label }) => (
+              <label className="behaviour-step-option" key={step}>
+                <input type="checkbox" required checked={behaviourSteps[step]} onChange={event => {
+                  const checked = event.currentTarget.checked;
+                  setBehaviourSteps(previous => ({ ...previous, [step]: checked }));
+                }}/>
+                {label}
+              </label>
+            ))}
+          </div>
+        </fieldset><div className="form-field"><label className="form-label" htmlFor="assigned-by">Assigned by <span>Automatic</span></label><input id="assigned-by" readOnly value={data.user?.name || "School staff"}/></div>{formError && <p className="form-error" role="alert">{formError}</p>}</div><div className="modal-footer"><span><ShieldCheck size={14}/>Saved to the school register</span><div><button className="button secondary" type="button" disabled={saving} onClick={closeModal}>Cancel</button><button className="button primary" type="submit" disabled={saving || bookingRefreshing || !!bookingLoadError || !selectedStudents.length || hasBookingConflict || !hasReason(reason) || !behaviourStepsConfirmed || !!reflectionClosure}>{saving ? <LoaderCircle size={16} className="spin"/> : <Plus size={17}/>} {saving ? "Adding…" : "Send to reflection"}</button></div></div></form></Modal>}
     {isAdmin && rescheduleId && rescheduleSource && <Modal title="Reschedule a missed reflection" subtitle={rescheduleStudent ? `${rescheduleStudent.name} · ${rescheduleStudent.grade} · ${rescheduleStudent.className}` : "Choose a school day for the replacement."} onClose={() => { if (!saving) setRescheduleId(null); }}><form onSubmit={saveReschedule}><div className="modal-body"><div className="reschedule-source"><CalendarClock size={18}/><div><strong>Original missed session</strong><span>{formatDate(rescheduleSource.date, { day: "numeric", month: "long", year: "numeric" })} · {slotLabels[rescheduleSource.slot]}</span><small>The original absence and recorded attendance remain in history.</small></div></div><div className="form-field"><label className="form-label" htmlFor="replacement-date">Replacement lunch date</label><SchoolDatePicker id="replacement-date" label="Replacement lunch date" min={rescheduleSource.date} value={rescheduleDate} disabled={saving} onChange={setRescheduleDate}/></div><p className="reflection-location"><MapPin size={16} aria-hidden="true"/> Lunch break · {reflectionLocation}</p>
         {rescheduleBlocked && (
           <div className="booking-warning" aria-live="polite">

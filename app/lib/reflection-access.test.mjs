@@ -11,6 +11,7 @@ const ts = require("typescript");
 const projectRoot = fileURLToPath(new URL("../../", import.meta.url));
 const ownerTemplate = { authSource: "google", memberId: "owner-member-id", userId: "google:owner-auth-id", email: "owner@elitelac.com", displayName: "School Administrator", fullName: null };
 const teacherTemplate = { authSource: "google", userId: "google:teacher-auth-id", email: "teacher@elitelac.com", displayName: "Untrusted Profile Name", fullName: null };
+const behaviourSteps = { chance: true, choice: true, consequence: true };
 // Deterministic source-calendar boundary for route tests. The actual closure
 // selection remains in the shared production calendar module.
 const testSchoolCalendar = {
@@ -138,7 +139,7 @@ test("teachers can record verified attendance but cannot manage staff or pupils"
       ["students/[id]", "DELETE", undefined, pupil.id],
     ]) assert.equal((await h.call(route, method, body, id)).status, 403);
 
-    const payload = { studentIds: [pupil.id], date: "2026-10-22", slots: ["lunch"], reason: "Reflection", assignedBy: "Freeform name" };
+    const payload = { studentIds: [pupil.id], date: "2026-10-22", slots: ["lunch"], reason: "Reflection", behaviourSteps, assignedBy: "Freeform name" };
     assert.deepEqual((await h.call("assignments", "POST", payload)).data, { ok: true, created: 1, skipped: 0 });
     assert.equal((await h.call("assignments", "POST", payload)).status, 409);
     const assignment = (await h.call("data")).data.assignments[0];
@@ -155,7 +156,7 @@ test("teachers can record verified attendance but cannot manage staff or pupils"
     h.state.identity = owner;
     assert.equal((await h.call("students/[id]", "DELETE", undefined, pupil.id)).status, 200);
     h.state.identity = teacher;
-    assert.equal((await h.call("assignments", "POST", { ...payload, date: "2026-10-23" })).status, 400);
+    assert.equal((await h.call("assignments", "POST", { ...payload, date: "2026-10-26" })).status, 400);
     assert.equal((await h.call("data")).data.students[0].active, false);
     assert.equal((await h.call("data")).data.assignments.length, 1);
   } finally { h.close(); }
@@ -221,9 +222,9 @@ test("one absence books two available lunches and keeps the original teacher att
   const h = await harness();
   try {
     const { pupil, source } = await missedFixture(h, "pending");
-    for (const date of ["2026-10-23", "2026-10-26"]) {
-      assert.equal((await h.call("assignments", "POST", { studentIds: [pupil.id], date, slots: ["lunch"], reason: "Existing booking" })).status, 200);
-    }
+    assert.equal((await h.call("assignments", "POST", {
+      studentIds: [pupil.id], date: "2026-10-26", slots: ["lunch"], reason: "Existing booking", behaviourSteps,
+    })).status, 200);
     h.state.identity = h.owner;
     const first = await h.call("assignments/[id]", "PATCH", { status: "absent" }, source.id);
     assert.equal(first.status, 200);
@@ -408,7 +409,7 @@ test("stale clients cannot book morning or both breaks, and historical morning a
     const { pupil, source } = await missedFixture(h);
     const activityBefore = h.sqlite.prepare("SELECT count(*) AS n FROM activity_events").get().n;
     for (const slots of [["morning"], ["morning", "lunch"]]) {
-      const result = await h.call("assignments", "POST", { studentIds: [pupil.id], date: "2026-10-26", slots, reason: "A reflection reason" });
+      const result = await h.call("assignments", "POST", { studentIds: [pupil.id], date: "2026-10-26", slots, reason: "A reflection reason", behaviourSteps });
       assert.equal(result.status, 400);
       assert.match(result.data.error, /lunch break only/);
     }
@@ -460,7 +461,7 @@ test("new reflection submissions reject absent, blank and invalid reasons withou
     const { pupil } = await missedFixture(h);
     const before = h.sqlite.prepare("SELECT count(*) AS n FROM reflection_assignments").get().n;
     const activityBefore = h.sqlite.prepare("SELECT count(*) AS n FROM activity_events").get().n;
-    const valid = { studentIds: [pupil.id], date: "2026-10-26", slots: ["lunch"], reason: "A reflection reason" };
+    const valid = { studentIds: [pupil.id], date: "2026-10-26", slots: ["lunch"], reason: "A reflection reason", behaviourSteps };
     for (const reason of [undefined, null, "", " \n\t ", "\u00a0\u3000", "\u200b\u2060", 42, "x".repeat(1001)]) {
       const result = await h.call("assignments", "POST", { ...valid, reason });
       assert.equal(result.status, 400);
@@ -473,20 +474,47 @@ test("new reflection submissions reject absent, blank and invalid reasons withou
   } finally { h.close(); }
 });
 
-test("server rejects stale clients assigning holidays, weekends and unverified calendar dates without writes", async () => {
+test("new bookings require behaviour confirmation and record it in the assignment audit", async () => {
+  const h = await harness();
+  try {
+    const { pupil } = await missedFixture(h);
+    const before = h.sqlite.prepare("SELECT count(*) AS n FROM reflection_assignments").get().n;
+    const input = { studentIds: [pupil.id], date: "2026-10-26", slots: ["lunch"], reason: "Fixture reason" };
+    for (const steps of [undefined, { ...behaviourSteps, choice: false }, { ...behaviourSteps, consequence: "true" }]) {
+      const result = await h.call("assignments", "POST", { ...input, behaviourSteps: steps });
+      assert.equal(result.status, 400);
+      assert.match(result.data.error, /Confirm that Chance, Choice and Consequence/);
+    }
+    assert.equal(h.sqlite.prepare("SELECT count(*) AS n FROM reflection_assignments").get().n, before);
+    assert.equal(h.sqlite.prepare("SELECT count(*) AS n FROM activity_events WHERE action = 'reflection.assigned'").get().n, 0);
+    assert.equal((await h.call("assignments", "POST", { ...input, behaviourSteps })).status, 200);
+    assert.match(h.sqlite.prepare("SELECT details FROM activity_events WHERE action = 'reflection.assigned'").get().details,
+      /Chance, Choice and Consequence confirmed/);
+  } finally { h.close(); }
+});
+
+test("server rejects stale clients assigning Fridays, weekends, holidays and unverified calendar dates without writes", async () => {
   const h = await harness();
   try {
     const { pupil } = await missedFixture(h);
     const before = h.sqlite.prepare("SELECT count(*) AS n FROM reflection_assignments").get().n;
     const activityBefore = h.sqlite.prepare("SELECT count(*) AS n FROM activity_events").get().n;
-    for (const [date, message] of [["2026-10-24", /weekends/], ["2026-10-25", /weekends/], ["2026-10-27", /Fixture school holiday/], ["2026-10-28", /Fixture school holiday/], ["2027-07-01", /outside the verified school calendar/]]) {
-      const result = await h.call("assignments", "POST", { studentIds: [pupil.id], date, slots: ["lunch"], reason: "Required reason", calendarOverride: true });
+    const closedDates = [
+      ["2026-10-23", /Monday through Thursday/],
+      ["2026-10-24", /weekends/],
+      ["2026-10-25", /weekends/],
+      ["2026-10-27", /Fixture school holiday/],
+      ["2026-10-28", /Fixture school holiday/],
+      ["2027-07-01", /outside the verified school calendar/],
+    ];
+    for (const [date, message] of closedDates) {
+      const result = await h.call("assignments", "POST", { studentIds: [pupil.id], date, slots: ["lunch"], reason: "Required reason", behaviourSteps, calendarOverride: true });
       assert.equal(result.status, 400);
       assert.match(result.data.error, message);
       assert.equal(h.sqlite.prepare("SELECT count(*) AS n FROM reflection_assignments").get().n, before);
       assert.equal(h.sqlite.prepare("SELECT count(*) AS n FROM activity_events").get().n, activityBefore);
     }
-    assert.equal((await h.call("assignments", "POST", { studentIds: [pupil.id], date: "2026-10-29", slots: ["lunch"], reason: "Required reason" })).status, 200);
+    assert.equal((await h.call("assignments", "POST", { studentIds: [pupil.id], date: "2026-10-29", slots: ["lunch"], reason: "Required reason", behaviourSteps })).status, 200);
   } finally { h.close(); }
 });
 
@@ -497,7 +525,7 @@ test("closed-date reschedules retain the original absence, and legacy blank reas
     h.sqlite.prepare("UPDATE reflection_assignments SET reason='' WHERE id=?").run(source.id);
     const before = h.sqlite.prepare("SELECT * FROM reflection_assignments WHERE id=?").get(source.id);
     const activityBefore = h.sqlite.prepare("SELECT count(*) AS n FROM activity_events").get().n;
-    for (const date of ["2026-10-24", "2026-10-27", "2026-10-28", "2027-07-01"]) {
+    for (const date of ["2026-10-23", "2026-10-24", "2026-10-27", "2026-10-28", "2027-07-01"]) {
       const result = await h.call("assignments/[id]/reschedule", "POST", { date, slot: "lunch" }, source.id);
       assert.equal(result.status, 400);
       assert.equal(h.sqlite.prepare("SELECT count(*) AS n FROM reflection_assignments").get().n, 1);
@@ -537,7 +565,7 @@ test("rescheduling preserves the original absence and creates one verified pendi
     assert.equal(replacement.attendanceRecordedAt, null);
     assert.equal((await h.call("assignments/[id]", "PATCH", { status: "present" }, source.id)).status, 409);
     assert.equal((await h.call("assignments/[id]", "DELETE", undefined, source.id)).status, 409);
-    assert.equal((await h.call("assignments/[id]/reschedule", "POST", { date: "2026-10-23", slot: "lunch" }, source.id)).status, 409);
+    assert.equal((await h.call("assignments/[id]/reschedule", "POST", { date: "2026-10-26", slot: "lunch" }, source.id)).status, 409);
   } finally { h.close(); }
 });
 
@@ -546,12 +574,12 @@ test("cancelling a replacement reopens its absence and keeps cancelled audit row
   const { owner, teacher } = h;
   try {
     const { source } = await missedFixture(h);
-    const first = await h.call("assignments/[id]/reschedule", "POST", { date: "2026-10-23", slot: "lunch" }, source.id);
+    const first = await h.call("assignments/[id]/reschedule", "POST", { date: "2026-10-26", slot: "lunch" }, source.id);
     assert.equal(first.status, 200);
     assert.equal((await h.call("assignments/[id]", "DELETE", undefined, first.data.assignmentId)).status, 200);
     const reopened = (await h.call("data")).data.assignments.find((assignment) => assignment.id === source.id);
     assert.deepEqual(reopened, source);
-    const second = await h.call("assignments/[id]/reschedule", "POST", { date: "2026-10-23", slot: "lunch" }, source.id);
+    const second = await h.call("assignments/[id]/reschedule", "POST", { date: "2026-10-26", slot: "lunch" }, source.id);
     assert.equal(second.status, 200);
     assert.notEqual(second.data.assignmentId, first.data.assignmentId);
     const old = h.sqlite.prepare("SELECT cancelled_at, rescheduled_from_id FROM reflection_assignments WHERE id = ?").get(first.data.assignmentId);
@@ -566,8 +594,8 @@ test("reschedule rejects booked targets, invalid sources, earlier dates, and arc
   const { owner, teacher } = h;
   try {
     const { source, pupil } = await missedFixture(h);
-    await h.call("assignments", "POST", { studentIds: [pupil.id], date: "2026-10-23", slots: ["lunch"], reason: "Already booked" });
-    assert.equal((await h.call("assignments/[id]/reschedule", "POST", { date: "2026-10-23", slot: "lunch" }, source.id)).status, 409);
+    assert.equal((await h.call("assignments", "POST", { studentIds: [pupil.id], date: "2026-10-26", slots: ["lunch"], reason: "Already booked", behaviourSteps })).status, 200);
+    assert.equal((await h.call("assignments/[id]/reschedule", "POST", { date: "2026-10-26", slot: "lunch" }, source.id)).status, 409);
     assert.equal((await h.call("assignments/[id]/reschedule", "POST", { date: "2026-10-21", slot: "lunch" }, source.id)).status, 400);
     assert.equal((await h.call("assignments/[id]/reschedule", "POST", { date: "2026-10-26", slot: ["morning", "lunch"] }, source.id)).status, 400);
     assert.equal((await h.call("assignments/[id]/reschedule", "POST", { date: "2026-10-26", slot: "lunch" }, "missing-source")).status, 404);
@@ -591,7 +619,7 @@ test("concurrent reschedules create only one replacement and never alter the sou
   try {
     const { source } = await missedFixture(h);
     const results = await Promise.all([
-      h.call("assignments/[id]/reschedule", "POST", { date: "2026-10-23", slot: "lunch" }, source.id),
+      h.call("assignments/[id]/reschedule", "POST", { date: "2026-10-29", slot: "lunch" }, source.id),
       h.call("assignments/[id]/reschedule", "POST", { date: "2026-10-26", slot: "lunch" }, source.id),
     ]);
     assert.deepEqual(results.map((result) => result.status).sort(), [200, 409]);
@@ -607,14 +635,14 @@ test("bulk assignment conflicts roll back every selected pupil, including races"
   const { owner, teacher } = h;
   try {
     const { source, pupil, other } = await missedFixture(h);
-    assert.equal((await h.call("assignments", "POST", { studentIds: [pupil.id], date: source.date, slots: ["lunch"], reason: "Already booked" })).status, 200);
-    const mixed = await h.call("assignments", "POST", { reason: "Fixture reflection reason", studentIds: [pupil.id, other.id], date: source.date, slots: ["lunch"] });
+    assert.equal((await h.call("assignments", "POST", { studentIds: [pupil.id], date: source.date, slots: ["lunch"], reason: "Already booked", behaviourSteps })).status, 200);
+    const mixed = await h.call("assignments", "POST", { reason: "Fixture reflection reason", studentIds: [pupil.id, other.id], date: source.date, slots: ["lunch"], behaviourSteps });
     assert.equal(mixed.status, 409);
     assert.match(mixed.data.error, /Test Pupil/);
     assert.equal((await h.call("data")).data.assignments.length, 2);
     const results = await Promise.all([
-      h.call("assignments", "POST", { reason: "Fixture reflection reason", studentIds: [pupil.id, other.id], date: "2026-10-26", slots: ["lunch"] }),
-      h.call("assignments", "POST", { reason: "Fixture reflection reason", studentIds: [pupil.id, other.id], date: "2026-10-26", slots: ["lunch"] }),
+      h.call("assignments", "POST", { reason: "Fixture reflection reason", studentIds: [pupil.id, other.id], date: "2026-10-26", slots: ["lunch"], behaviourSteps }),
+      h.call("assignments", "POST", { reason: "Fixture reflection reason", studentIds: [pupil.id, other.id], date: "2026-10-26", slots: ["lunch"], behaviourSteps }),
     ]);
     assert.deepEqual(results.map((result) => result.status).sort(), [200, 409]);
     assert.equal((await h.call("data")).data.assignments.length, 4);
@@ -635,8 +663,8 @@ test("a raced conflict in a later bulk statement rolls back earlier successful s
     const firstIds = [...other.slice(0, 9).map((pupil) => pupil.id), shared.id];
     const secondIds = [...other.slice(9).map((pupil) => pupil.id), shared.id];
     const results = await Promise.all([
-      h.call("assignments", "POST", { reason: "Fixture reflection reason", studentIds: firstIds, date: "2026-10-26", slots: ["lunch"] }),
-      h.call("assignments", "POST", { reason: "Fixture reflection reason", studentIds: secondIds, date: "2026-10-26", slots: ["lunch"] }),
+      h.call("assignments", "POST", { reason: "Fixture reflection reason", studentIds: firstIds, date: "2026-10-26", slots: ["lunch"], behaviourSteps }),
+      h.call("assignments", "POST", { reason: "Fixture reflection reason", studentIds: secondIds, date: "2026-10-26", slots: ["lunch"], behaviourSteps }),
     ]);
     assert.deepEqual(results.map((result) => result.status).sort(), [200, 409]);
     const savedIds = new Set((await h.call("data")).data.assignments.map((assignment) => assignment.studentId));
@@ -653,7 +681,7 @@ test("attendance correction and rescheduling cannot race into a present source w
     const { source } = await missedFixture(h);
     const results = await Promise.all([
       h.call("assignments/[id]", "PATCH", { status: "present" }, source.id),
-      h.call("assignments/[id]/reschedule", "POST", { date: "2026-10-23", slot: "lunch" }, source.id),
+      h.call("assignments/[id]/reschedule", "POST", { date: "2026-10-26", slot: "lunch" }, source.id),
     ]);
     assert.equal(results.filter((result) => result.status === 200).length, 1);
     assert.ok(results.some((result) => result.status === 400 || result.status === 409));
@@ -833,7 +861,7 @@ test("deleting staff removes access and sessions, hides the account and preserve
     await h.call("students", "POST", { source: "Manual entry", students: [{ name: "History Pupil", grade: "Year 7", className: "7A" }] });
     const pupil = (await h.call("data")).data.students[0];
     h.state.identity = h.teacher;
-    await h.call("assignments", "POST", { reason: "Fixture reflection reason", studentIds: [pupil.id], date: "2026-10-22", slots: ["lunch"], assignedBy: "Forged name" });
+    await h.call("assignments", "POST", { reason: "Fixture reflection reason", studentIds: [pupil.id], date: "2026-10-22", slots: ["lunch"], behaviourSteps, assignedBy: "Forged name" });
     const assignment = (await h.call("data")).data.assignments[0];
     await h.call("assignments/[id]", "PATCH", { status: "present" }, assignment.id);
     h.sqlite.prepare("INSERT INTO staff_google_identities(subject,member_id,email,created_at,last_authenticated_at) VALUES(?,?,?,?,?)")
@@ -917,7 +945,7 @@ test("activity is administrator-only and records trusted actors across the refle
     await h.call("students/[id]", "PATCH", { className: "7B" }, pupil.id);
     h.state.identity = h.teacher;
     assert.equal((await h.call("activity")).status, 403);
-    await h.call("assignments", "POST", { reason: "Fixture reflection reason", studentIds: [pupil.id], date: "2026-10-22", slots: ["lunch"], assignedBy: "Forged actor", actorId: "forged" });
+    await h.call("assignments", "POST", { reason: "Fixture reflection reason", studentIds: [pupil.id], date: "2026-10-22", slots: ["lunch"], behaviourSteps, assignedBy: "Forged actor", actorId: "forged" });
     const original = (await h.call("data")).data.assignments[0];
     assert.equal(original.assignedBy, "Confirmed Teacher");
     const absent = await h.call("assignments/[id]", "PATCH", { status: "absent", actorName: "Forged actor" }, original.id);
@@ -1009,7 +1037,7 @@ test("moderators use teacher operations and insights but cannot read or mutate a
     assert.equal(h.sqlite.prepare("SELECT name,active FROM students WHERE id=?").get(pupil.id).name, "Moderated Pupil");
     assert.equal(h.sqlite.prepare("SELECT active FROM students WHERE id=?").get(pupil.id).active, 1);
     assert.equal((await h.call("insights")).status, 200);
-    const assignment = { reason: "Fixture reflection reason", studentIds: [pupil.id], date: "2026-10-23", slots: ["lunch"], assignedBy: "Spoofed admin" };
+    const assignment = { reason: "Fixture reflection reason", studentIds: [pupil.id], date: "2026-10-22", slots: ["lunch"], behaviourSteps, assignedBy: "Spoofed admin" };
     assert.equal((await h.call("assignments", "POST", assignment)).status, 200);
     const original = (await h.call("data")).data.assignments[0];
     assert.equal(original.assignedBy, "School Moderator");

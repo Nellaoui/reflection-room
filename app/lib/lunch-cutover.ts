@@ -3,7 +3,7 @@ import type { InStatement, Transaction } from "@libsql/client";
 import type { getDb } from "@/db";
 import { ApiError } from "@/app/lib/reflection-errors";
 import type { StaffUser } from "@/app/lib/reflection-membership";
-import { nextSchoolDay } from "@/app/lib/school-calendar";
+import { nextReflectionDay } from "@/app/lib/school-calendar";
 import { casablancaClock } from "@/app/lib/weekly-report";
 
 type CutoverDatabase = Pick<ReturnType<typeof getDb>, "$client">;
@@ -55,8 +55,8 @@ async function planCutover(database: Pick<Transaction, "execute">, schoolDate: s
     const booking = { id: String(row.id), studentName: String(row.student_name), fromDate };
     const reservedDays = occupied.get(String(row.student_id))!;
     const earliestDay = fromDate < schoolDate ? schoolDate : fromDate;
-    let toDate = nextSchoolDay(earliestDay, 1, true);
-    while (toDate && reservedDays.has(toDate)) toDate = nextSchoolDay(toDate);
+    let toDate = nextReflectionDay(earliestDay, true);
+    while (toDate && reservedDays.has(toDate)) toDate = nextReflectionDay(toDate);
     if (!toDate) {
       blocked.push(booking);
       continue;

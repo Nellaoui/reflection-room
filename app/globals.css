@@ -65,3 +65,11 @@ body{font-size:16px;line-height:1.5}.nav-link,.admin-navigation .nav-link{font-s
 }.session-card-body p {
   font-size: 14px;
 }
+
+.behaviour-steps{border:0;padding:0;margin:18px 0 0;min-inline-size:0}
+.behaviour-steps-hint{margin:0 0 10px;color:#617458;font-size:14px;line-height:1.5}
+.behaviour-step-options{display:flex;flex-wrap:wrap;gap:8px}
+.behaviour-step-option{flex:1 1 130px;display:flex;align-items:center;gap:9px;min-height:44px;border:1px solid #e1e7d6;border-radius:6px;padding:9px 11px;color:#354e2b;font-size:15px;cursor:pointer}
+.behaviour-step-option:has(input:checked){background:#f3f7ed;border-color:#9eb48b}
+.behaviour-step-option input{margin:0;width:17px;height:17px;flex-shrink:0}
+.behaviour-step-option input:focus-visible{outline:2px solid #456c35;outline-offset:3px}

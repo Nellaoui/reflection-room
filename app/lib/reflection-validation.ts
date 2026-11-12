@@ -6,9 +6,9 @@ export type StaffRole = "admin" | "teacher" | "moderator";
 export type StaffStatus = "active" | "disabled";
 export type RosterStudent = { name: string; grade: string; className: string; rosterKey: string; toddleId: string | null };
 
-function record(value: unknown): Record<string, unknown> {
+function record(value: unknown, message = "Please send a JSON object."): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new ValidationError("Please send a JSON object.");
+    throw new ValidationError(message);
   }
   return value as Record<string, unknown>;
 }
@@ -55,6 +55,11 @@ export function assignmentInput(value: unknown, fallbackName: string) {
   if (body.reason === undefined || body.reason === null) throw new ValidationError("Reason is required.");
   const reason = text(body.reason, "Reason", 1000);
   if (!reason.replace(/[\p{White_Space}\p{Cf}]/gu, "")) throw new ValidationError("Reason is required.");
+  const confirmationMessage = "Confirm that Chance, Choice and Consequence were completed before assigning a reflection.";
+  const steps = record(body.behaviourSteps, confirmationMessage);
+  if (steps.chance !== true || steps.choice !== true || steps.consequence !== true) {
+    throw new ValidationError(confirmationMessage);
+  }
   return {
     studentIds,
     slot: "lunch" as const,

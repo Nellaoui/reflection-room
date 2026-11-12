@@ -72,10 +72,10 @@ test("morning cutover cascades around booked lunches and school closures, preser
   assert.equal(plan.schoolDate, "2026-11-12");
   assert.deepEqual(plan.blocked, []);
   assert.deepEqual(plan.moves.map(move => [move.id, move.fromDate, move.toDate]), [
-    ["oldest", "2026-11-05", "2026-11-13"],
+    ["oldest", "2026-11-05", "2026-11-17"],
     ["unrelated-same-day", "2026-11-12", "2026-11-12"],
-    ["next", "2026-11-13", "2026-11-17"],
-    ["holiday", "2026-11-18", "2026-11-19"],
+    ["next", "2026-11-13", "2026-11-19"],
+    ["holiday", "2026-11-18", "2026-11-23"],
   ]);
   assert.deepEqual(database.assignments(), before);
   assert.deepEqual(database.activity(), []);
@@ -94,7 +94,7 @@ test("morning cutover cascades around booked lunches and school closures, preser
   const events = database.activity();
   assert.equal(events.length, 4);
   assert.ok(events.every(event => event.actor_id === actor.memberId && event.action === "reflection.rescheduled"));
-  assert.equal(events.find(event => event.target_id === "oldest").details, "2026-11-05 · Morning break → 2026-11-13 · Lunch break");
+  assert.equal(events.find(event => event.target_id === "oldest").details, "2026-11-05 · Morning break → 2026-11-17 · Lunch break");
   assert.equal((await applyLunchCutover(database.db, actor, plan.planId, now)).moved, 0);
   assert.deepEqual(database.activity(), events);
 });
@@ -107,7 +107,7 @@ test("a new lunch reservation invalidates the reviewed cutover plan", async t =>
   await assert.rejects(applyLunchCutover(database.db, actor, plan.planId, now), { status: 409, message: /proposed moves have changed/ });
   assert.equal(database.assignments().find(row => row.id === "morning").slot, "morning");
   assert.equal(database.activity().length, 0);
-  assert.equal((await previewLunchCutover(database.db, now)).moves[0].toDate, "2026-11-13");
+  assert.equal((await previewLunchCutover(database.db, now)).moves[0].toDate, "2026-11-16");
 });
 
 test("the Casablanca school date sets the scheduling floor and expires a plan across midnight", async t => {
@@ -120,7 +120,7 @@ test("the Casablanca school date sets the scheduling floor and expires a plan ac
   await assert.rejects(applyLunchCutover(database.db, actor, plan.planId, nextMorning), { status: 409 });
   const refreshed = await previewLunchCutover(database.db, nextMorning);
   assert.equal(refreshed.schoolDate, "2026-11-13");
-  assert.equal(refreshed.moves[0].toDate, "2026-11-13");
+  assert.equal(refreshed.moves[0].toDate, "2026-11-16");
 });
 
 test("calendar exhaustion or an audit failure rolls back every move", async t => {
