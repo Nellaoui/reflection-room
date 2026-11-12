@@ -196,7 +196,7 @@ test("concurrent verified identities cannot self-register or create another admi
   } finally { h.close(); }
 });
 
-async function missedFixture(h) {
+async function missedFixture(h, status = "absent") {
   await h.call("data");
   await inviteTeacher(h);
   await h.call("students", "POST", { source: "Test roster", students: [
@@ -208,11 +208,130 @@ async function missedFixture(h) {
   const other = students.find((student) => student.id !== pupil.id);
   h.state.identity = h.teacher;
   const id = "legacy-morning-fixture";
-  h.sqlite.prepare("INSERT INTO reflection_assignments (id,student_id,date,slot,reason,assigned_by,status,created_at,updated_at,created_by_user_id,updated_by_user_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
-    .run(id, pupil.id, "2026-10-22", "morning", "Original reflection reason", "Verified Teacher", "pending", "2026-10-22", "2026-10-22", h.teacher.userId, h.teacher.userId);
-  await h.call("assignments/[id]", "PATCH", { status: "absent" }, id);
+  h.sqlite.prepare(`INSERT INTO reflection_assignments
+    (id,student_id,date,slot,reason,assigned_by,status,created_at,updated_at,created_by_user_id,updated_by_user_id,attendance_recorded_by,attendance_recorded_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(id, pupil.id, "2026-10-22", "morning", "Original reflection reason", "Verified Teacher", status, "2026-10-22", "2026-10-22", h.teacher.userId, h.teacher.userId,
+      status === "absent" ? "Verified Teacher" : null, status === "absent" ? "2026-10-22T12:00:00.000Z" : null);
   return { pupil, other, source: (await h.call("data")).data.assignments[0] };
 }
+
+test("an absence books the next free school lunch once and keeps the original teacher attribution", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-23T12:00:00Z") });
+  const h = await harness();
+  try {
+    const { pupil, source } = await missedFixture(h, "pending");
+    for (const date of ["2026-10-23", "2026-10-26"]) {
+      assert.equal((await h.call("assignments", "POST", { studentIds: [pupil.id], date, slots: ["lunch"], reason: "Existing booking" })).status, 200);
+    }
+    h.state.identity = h.owner;
+    const first = await h.call("assignments/[id]", "PATCH", { status: "absent" }, source.id);
+    assert.equal(first.status, 200);
+    assert.equal(first.data.followUp.date, "2026-10-29");
+    t.mock.timers.tick(1000);
+    const retry = await h.call("assignments/[id]", "PATCH", { status: "absent" }, source.id);
+    assert.deepEqual(retry, first);
+    const assignments = (await h.call("data")).data.assignments;
+    const original = assignments.find(row => row.id === source.id);
+    const followUp = assignments.find(row => row.id === first.data.followUp.id);
+    assert.equal(original.status, "absent");
+    assert.equal(original.date, source.date);
+    assert.equal(original.rescheduledToId, followUp.id);
+    assert.equal(original.canCorrectAttendance, true);
+    assert.equal(followUp.reason, source.reason);
+    assert.equal(followUp.assignedBy, source.assignedBy);
+    assert.equal(followUp.status, "pending");
+    assert.equal(followUp.slot, "lunch");
+    assert.equal(followUp.rescheduledFromId, source.id);
+    const saved = h.sqlite.prepare("SELECT created_by_user_id FROM reflection_assignments WHERE id = ?").get(followUp.id);
+    assert.equal(saved.created_by_user_id, h.teacher.userId);
+    const activity = (await h.call("activity")).data.events;
+    assert.equal(activity.filter(event => event.action === "attendance.recorded" && event.targetId === source.id).length, 1);
+    const automatic = activity.filter(event => event.action === "reflection.auto_rescheduled");
+    assert.equal(automatic.length, 1);
+    assert.equal(automatic[0].actorId, h.owner.memberId);
+  } finally { h.close(); }
+});
+
+test("an attendance correction cancels its pending automatic follow-up and protects attended follow-ups", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-22T12:00:00Z") });
+  const h = await harness();
+  try {
+    const { source } = await missedFixture(h, "pending");
+    const first = (await h.call("assignments/[id]", "PATCH", { status: "absent" }, source.id)).data.followUp;
+    const corrected = await h.call("assignments/[id]", "PATCH", { status: "present" }, source.id);
+    assert.equal(corrected.status, 200);
+    assert.equal(corrected.data.followUpCancelled, true);
+    assert.ok(h.sqlite.prepare("SELECT cancelled_at FROM reflection_assignments WHERE id = ?").get(first.id).cancelled_at);
+    assert.equal((await h.call("data")).data.assignments.find(row => row.id === source.id).status, "present");
+
+    const second = (await h.call("assignments/[id]", "PATCH", { status: "absent" }, source.id)).data.followUp;
+    assert.notEqual(second.id, first.id);
+    assert.equal(second.date, first.date);
+    assert.equal((await h.call("assignments/[id]", "PATCH", { status: "present" }, second.id)).status, 200);
+    assert.equal((await h.call("assignments/[id]", "PATCH", { status: "present" }, source.id)).status, 409);
+    const assignments = (await h.call("data")).data.assignments;
+    assert.equal(assignments.find(row => row.id === source.id).canCorrectAttendance, undefined);
+    assert.equal(assignments.find(row => row.id === second.id).status, "present");
+  } finally { h.close(); }
+});
+
+test("concurrent absent marks and a missed follow-up each create one replacement per missed session", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-22T12:00:00Z") });
+  const h = await harness();
+  try {
+    const { source } = await missedFixture(h, "pending");
+    const first = await Promise.all([
+      h.call("assignments/[id]", "PATCH", { status: "absent" }, source.id),
+      h.call("assignments/[id]", "PATCH", { status: "absent" }, source.id),
+    ]);
+    assert.deepEqual(first.map(result => result.status), [200, 200]);
+    assert.deepEqual(first[0].data.followUp, first[1].data.followUp);
+    const replacement = first[0].data.followUp;
+    t.mock.timers.tick(86400000);
+    const missed = await h.call("assignments/[id]", "PATCH", { status: "absent" }, replacement.id);
+    assert.equal(missed.status, 200);
+    assert.equal(missed.data.followUp.date, "2026-10-26");
+    assert.deepEqual((await h.call("data")).data.assignments.map(row => row.status), ["absent", "absent", "pending"]);
+  } finally { h.close(); }
+});
+
+test("attendance is saved when a student is archived or the verified calendar has no remaining date", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2027-06-30T12:00:00Z") });
+  const h = await harness();
+  try {
+    const { source, pupil } = await missedFixture(h, "pending");
+    h.sqlite.prepare("UPDATE reflection_assignments SET date = '2027-06-30' WHERE id = ?").run(source.id);
+    const atCalendarEnd = await h.call("assignments/[id]", "PATCH", { status: "absent" }, source.id);
+    assert.equal(atCalendarEnd.status, 200);
+    assert.equal(atCalendarEnd.data.followUp, null);
+    assert.equal(atCalendarEnd.data.followUpUnavailable, "calendar");
+    assert.equal(h.sqlite.prepare("SELECT status FROM reflection_assignments WHERE id = ?").get(source.id).status, "absent");
+    await h.call("assignments/[id]", "PATCH", { status: "pending" }, source.id);
+    h.sqlite.prepare("UPDATE students SET active = 0 WHERE id = ?").run(pupil.id);
+    const archived = await h.call("assignments/[id]", "PATCH", { status: "absent" }, source.id);
+    assert.equal(archived.status, 200);
+    assert.equal(archived.data.followUpUnavailable, "archived");
+    assert.equal(h.sqlite.prepare("SELECT status FROM reflection_assignments WHERE id = ?").get(source.id).status, "absent");
+    assert.equal(h.sqlite.prepare("SELECT count(*) AS n FROM reflection_assignments").get().n, 1);
+  } finally { h.close(); }
+});
+
+test("a follow-up audit failure rolls back both the absence and replacement", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-22T12:00:00Z") });
+  const h = await harness();
+  const originalError = console.error;
+  try {
+    const { source } = await missedFixture(h, "pending");
+    h.sqlite.exec(`CREATE TRIGGER reject_followup_audit BEFORE INSERT ON activity_events
+      WHEN NEW.action = 'reflection.auto_rescheduled' BEGIN SELECT RAISE(ABORT, 'test audit unavailable'); END`);
+    console.error = () => {};
+    assert.equal((await h.call("assignments/[id]", "PATCH", { status: "absent" }, source.id)).status, 500);
+    assert.equal(h.sqlite.prepare("SELECT status FROM reflection_assignments WHERE id = ?").get(source.id).status, "pending");
+    assert.equal(h.sqlite.prepare("SELECT count(*) AS n FROM reflection_assignments").get().n, 1);
+    assert.equal(h.sqlite.prepare("SELECT count(*) AS n FROM activity_events WHERE action = 'attendance.recorded'").get().n, 0);
+  } finally { console.error = originalError; h.close(); }
+});
 
 test("stale clients cannot book morning or both breaks, and historical morning attendance remains visible", async () => {
   const h = await harness();
@@ -387,7 +506,7 @@ test("reschedule rejects booked targets, invalid sources, earlier dates, and arc
     const pending = data.assignments.find((assignment) => assignment.id !== source.id);
     assert.equal((await h.call("assignments/[id]/reschedule", "POST", { date: "2026-10-26", slot: "lunch" }, pending.id)).status, 400);
     assert.deepEqual(data.assignments.find((assignment) => assignment.id === source.id), source);
-    assert.equal((await h.call("assignments/[id]", "PATCH", { status: "absent" }, pending.id)).status, 200);
+    h.sqlite.prepare("UPDATE reflection_assignments SET status = 'absent' WHERE id = ?").run(pending.id);
     assert.equal((await h.call("assignments/[id]/reschedule", "POST", { date: pending.date, slot: "lunch" }, pending.id)).status, 409);
     h.state.identity = owner;
     await h.call("students/[id]", "DELETE", undefined, pupil.id);
@@ -718,7 +837,8 @@ test("two administrators cannot concurrently delete every active administrator",
   } finally { h.close(); }
 });
 
-test("activity is administrator-only and records trusted actors across the reflection and pupil workflow", async () => {
+test("activity is administrator-only and records trusted actors across the reflection and pupil workflow", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-22T12:00:00Z") });
   const h = await harness();
   try {
     const teacher = await inviteTeacher(h);
@@ -731,17 +851,17 @@ test("activity is administrator-only and records trusted actors across the refle
     await h.call("assignments", "POST", { reason: "Fixture reflection reason", studentIds: [pupil.id], date: "2026-10-22", slots: ["lunch"], assignedBy: "Forged actor", actorId: "forged" });
     const original = (await h.call("data")).data.assignments[0];
     assert.equal(original.assignedBy, "Confirmed Teacher");
-    await h.call("assignments/[id]", "PATCH", { status: "absent", actorName: "Forged actor" }, original.id);
-    const replacement = await h.call("assignments/[id]/reschedule", "POST", { date: "2026-10-23", slot: "lunch", assignedBy: "Forged actor" }, original.id);
-    assert.equal(replacement.status, 200);
-    await h.call("assignments/[id]", "DELETE", {}, replacement.data.assignmentId);
+    const absent = await h.call("assignments/[id]", "PATCH", { status: "absent", actorName: "Forged actor" }, original.id);
+    assert.equal(absent.status, 200);
+    assert.equal(absent.data.followUp.date, "2026-10-23");
+    await h.call("assignments/[id]", "DELETE", {}, absent.data.followUp.id);
     h.state.identity = h.owner;
     await h.call("students/[id]", "DELETE", {}, pupil.id);
     const response = await h.call("activity");
     assert.equal(response.status, 200);
     assert.equal(response.data.limit, 300);
     const events = response.data.events;
-    assert.deepEqual(new Set(events.map(event => event.action)), new Set(["staff.created", "staff.updated", "student.created", "student.updated", "student.archived", "reflection.assigned", "attendance.recorded", "reflection.rescheduled", "reflection.cancelled"]));
+    assert.deepEqual(new Set(events.map(event => event.action)), new Set(["staff.created", "staff.updated", "student.created", "student.updated", "student.archived", "reflection.assigned", "attendance.recorded", "reflection.auto_rescheduled", "reflection.cancelled"]));
     assert.ok(events.every(event => event.createdAt.endsWith("Z") && !event.actorName.includes("Forged")));
     const teacherEvents = events.filter(event => event.targetType === "reflection");
     assert.ok(teacherEvents.every(event => event.actorId === teacher.id && event.actorName === "Confirmed Teacher" && event.targetName === "Audit Pupil"));
@@ -793,7 +913,8 @@ test("activity returns the newest bounded page and roster imports are logged wit
   } finally { h.close(); }
 });
 
-test("moderators use teacher operations and insights but cannot read or mutate administrator management", async () => {
+test("moderators use teacher operations and insights but cannot read or mutate administrator management", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-23T12:00:00Z") });
   const h = await harness();
   try {
     const created = await h.call("users", "POST", { name: "School Moderator", email: "moderator@elitelac.com", role: "moderator" });
@@ -823,13 +944,13 @@ test("moderators use teacher operations and insights but cannot read or mutate a
     assert.equal((await h.call("assignments", "POST", assignment)).status, 200);
     const original = (await h.call("data")).data.assignments[0];
     assert.equal(original.assignedBy, "School Moderator");
-    assert.equal((await h.call("assignments/[id]", "PATCH", { status: "absent" }, original.id)).status, 200);
-    const replacement = await h.call("assignments/[id]/reschedule", "POST", { date: "2026-10-26", slot: "lunch" }, original.id);
-    assert.equal(replacement.status, 200);
-    assert.equal((await h.call("assignments/[id]", "DELETE", {}, replacement.data.assignmentId)).status, 200);
+    const absent = await h.call("assignments/[id]", "PATCH", { status: "absent" }, original.id);
+    assert.equal(absent.status, 200);
+    assert.equal(absent.data.followUp.date, "2026-10-26");
+    assert.equal((await h.call("assignments/[id]", "DELETE", {}, absent.data.followUp.id)).status, 200);
     h.state.identity = h.owner;
     const logs = (await h.call("activity")).data.events.filter(event => event.actorId === moderator.memberId);
-    assert.deepEqual(new Set(logs.map(event => event.action)), new Set(["reflection.assigned", "attendance.recorded", "reflection.rescheduled", "reflection.cancelled"]));
+    assert.deepEqual(new Set(logs.map(event => event.action)), new Set(["reflection.assigned", "attendance.recorded", "reflection.auto_rescheduled", "reflection.cancelled"]));
     assert.ok(logs.every(event => event.actorName === "School Moderator"));
   } finally { h.close(); }
 });
