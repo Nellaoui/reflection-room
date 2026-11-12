@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "Reflection Room · London Academy",
-  description: "Morning and lunch break reflection sessions. One shared register for London Academy Bouskoura.",
+  description: "Lunch break reflections in the Music Room on the canteen floor at London Academy Bouskoura.",
   icons: {
     icon: "/school-logo.png",
     shortcut: "/school-logo.png",

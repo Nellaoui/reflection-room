@@ -49,17 +49,15 @@ export function assignmentInput(value: unknown, fallbackName: string) {
     throw new ValidationError("Select between 1 and 2,000 students.");
   }
   const studentIds = [...new Set(body.studentIds.map(validId))];
-  if (!Array.isArray(body.slots) || !body.slots.length || body.slots.length > 2 ||
-      !body.slots.every((slot) => slot === "morning" || slot === "lunch")) {
-    throw new ValidationError("Choose morning break, lunch break, or both.");
+  if (!Array.isArray(body.slots) || body.slots.length !== 1 || body.slots[0] !== "lunch") {
+    throw new ValidationError("Reflection runs during lunch break only.");
   }
-  const slots = [...new Set(body.slots)] as ReflectionSlot[];
   if (body.reason === undefined || body.reason === null) throw new ValidationError("Reason is required.");
   const reason = text(body.reason, "Reason", 1000);
   if (!reason.replace(/[\p{White_Space}\p{Cf}]/gu, "")) throw new ValidationError("Reason is required.");
   return {
     studentIds,
-    slots,
+    slot: "lunch" as const,
     date: validDate(body.date),
     reason,
     // Attribution comes from active server membership. Legacy clients may still
@@ -76,10 +74,10 @@ export function attendanceInput(value: unknown): AttendanceStatus {
   return body.status;
 }
 
-export function rescheduleInput(value: unknown): { date: string; slot: ReflectionSlot } {
+export function rescheduleInput(value: unknown): { date: string; slot: "lunch" } {
   const body = record(value);
-  if (body.slot !== "morning" && body.slot !== "lunch") {
-    throw new ValidationError("Choose one replacement session: morning break or lunch break.");
+  if (body.slot !== "lunch") {
+    throw new ValidationError("Reflection runs during lunch break only.");
   }
   return { date: validDate(body.date), slot: body.slot };
 }

@@ -30,24 +30,24 @@ export async function POST(request: Request) {
           .where(and(
             inArray(reflectionAssignments.studentId, group),
             eq(reflectionAssignments.date, input.date),
-            inArray(reflectionAssignments.slot, input.slots),
+            eq(reflectionAssignments.slot, input.slot),
             isNull(reflectionAssignments.cancelledAt),
           ));
         matches.forEach((row) => booked.add(`${row.name} (${row.className})`));
       }
       if (!booked.size) return "";
       const names = [...booked];
-      return `Already booked for a selected session: ${names.slice(0, 5).join(", ")}${names.length > 5 ? ` and ${names.length - 5} more` : ""}. Refresh and choose another session.`;
+      return `Already booked for this lunch session: ${names.slice(0, 5).join(", ")}${names.length > 5 ? ` and ${names.length - 5} more` : ""}. Refresh and choose another school day.`;
     }
     const existingConflict = await bookingConflictMessage();
     if (existingConflict) throw new ApiError(409, existingConflict);
 
     const now = new Date().toISOString();
-    const rows = input.studentIds.flatMap((studentId) => input.slots.map((slot) => ({
+    const rows = input.studentIds.map((studentId) => ({
       id: crypto.randomUUID(),
       studentId,
       date: input.date,
-      slot,
+      slot: input.slot,
       reason: input.reason,
       assignedBy: input.assignedBy,
       status: "pending" as const,
@@ -55,7 +55,7 @@ export async function POST(request: Request) {
       updatedAt: now,
       createdByUserId: user.userId,
       updatedByUserId: user.userId,
-    })));
+    }));
 
     // Small inserts keep each prepared statement below D1's bind-parameter limit.
     const statements = chunks(rows, 7).map((group) => db.insert(reflectionAssignments).values(group).returning({ id: reflectionAssignments.id }));
@@ -70,7 +70,7 @@ export async function POST(request: Request) {
       const created = saved.slice(0, statements.length).reduce((total, result) => total + (Array.isArray(result) ? result.length : 0), 0);
       return json({ ok: true, created, skipped: 0 });
     } catch (error) {
-      if (isUniqueConstraintError(error)) throw new ApiError(409, await bookingConflictMessage() || "A selected session was just booked by another staff member. Refresh and try again.");
+      if (isUniqueConstraintError(error)) throw new ApiError(409, await bookingConflictMessage() || "The lunch session was just booked by another staff member. Refresh and try again.");
       throw error;
     }
   });

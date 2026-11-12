@@ -26,7 +26,7 @@ export async function POST(request: Request, context: RouteContext) {
     if (source.status !== "absent") throw new ApiError(400, "Only a session marked absent can be rescheduled.");
     if (!source.studentActive) throw new ApiError(400, "This student is archived. Ask an administrator to restore the student first.");
     if (input.date < source.date) throw new ApiError(400, "The replacement date cannot be before the original reflection.");
-    if (input.date === source.date && input.slot === source.slot) throw new ApiError(409, "Choose a different date or break from the original missed reflection.");
+    if (input.date === source.date && input.slot === source.slot) throw new ApiError(409, "Choose a later school day for the replacement lunch session.");
     const closed = schoolDayClosure(input.date);
     if (closed) throw new ApiError(400, closed);
 
@@ -44,7 +44,7 @@ export async function POST(request: Request, context: RouteContext) {
         INNER JOIN students pupil ON pupil.id = original.student_id
         WHERE original.id = ${sourceId}
           AND original.status = 'absent' AND original.cancelled_at IS NULL AND pupil.active = 1
-          AND original.date <= ${input.date}
+          AND original.date = ${source.date} AND original.slot = ${source.slot}
           AND NOT EXISTS (
             SELECT 1 FROM reflection_assignments replacement
             WHERE replacement.rescheduled_from_id = original.id AND replacement.cancelled_at IS NULL
@@ -58,7 +58,7 @@ export async function POST(request: Request, context: RouteContext) {
       if (!created.length) throw new ApiError(409, "This missed reflection has changed or already has a replacement. Refresh the list.");
       return json({ ok: true, assignmentId: created[0].id, sourceAssignmentId: sourceId });
     } catch (error) {
-      if (isUniqueConstraintError(error)) throw new ApiError(409, "This student already has the chosen session, or the missed reflection was just rescheduled. Refresh and choose another session.");
+      if (isUniqueConstraintError(error)) throw new ApiError(409, "This student already has a lunch session that day, or the missed reflection was just rescheduled. Refresh and choose another school day.");
       throw error;
     }
   });
