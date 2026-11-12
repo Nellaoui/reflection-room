@@ -40,6 +40,7 @@ function localDate(date: Date) {
 }
 
 type Period = "all" | "7" | "30";
+type SessionCounts = { assigned: number; present: number; absent: number };
 
 export default function StudentInsights({ students, assignments, onOpenStudent }: {
   students: Student[];
@@ -54,29 +55,32 @@ export default function StudentInsights({ students, assignments, onOpenStudent }
   const grades = useMemo(() => [...new Set(students.map(student => student.grade))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })), [students]);
   const classes = useMemo(() => [...new Set(students.filter(student => !grade || student.grade === grade).map(student => student.className))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })), [students, grade]);
 
-  const absenceCounts = useMemo(() => {
+  const sessionCounts = useMemo(() => {
     let startDate: string | null = null;
     if (period !== "all") {
       const start = new Date(`${today}T12:00:00`);
       start.setDate(start.getDate() - (Number(period) - 1));
       startDate = localDate(start);
     }
-    const counts = new Map<string, number>();
+    const counts = new Map<string, SessionCounts>();
     for (const assignment of assignments) {
-      if (assignment.status !== "absent") continue;
       if (startDate && (assignment.date < startDate || assignment.date > today)) continue;
-      counts.set(assignment.studentId, (counts.get(assignment.studentId) ?? 0) + 1);
+      const studentCounts = counts.get(assignment.studentId) ?? { assigned: 0, present: 0, absent: 0 };
+      studentCounts.assigned++;
+      if (assignment.status === "present") studentCounts.present++;
+      if (assignment.status === "absent") studentCounts.absent++;
+      counts.set(assignment.studentId, studentCounts);
     }
     return counts;
   }, [assignments, period, today]);
 
   const search = query.trim().toLowerCase();
   const rows = students.flatMap(student => {
-    const absences = absenceCounts.get(student.id);
-    if (!absences || (grade && student.grade !== grade) || (className && student.className !== className)) return [];
+    const counts = sessionCounts.get(student.id);
+    if (!counts || (grade && student.grade !== grade) || (className && student.className !== className)) return [];
     if (search && !`${student.name} ${student.grade} ${student.className}`.toLowerCase().includes(search)) return [];
-    return [{ ...student, absences }];
-  }).sort((a, b) => b.absences - a.absences || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+    return [{ ...student, ...counts }];
+  }).sort((a, b) => b.absent - a.absent || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
   const hasFilters = Boolean(search || grade || className || period !== "all");
 
   function clearFilters() {
@@ -86,7 +90,7 @@ export default function StudentInsights({ students, assignments, onOpenStudent }
     setPeriod("all");
   }
 
-  return <section className="student-insights" aria-label="Student reflection absences">
+  return <section className="student-insights" aria-label="Student reflection insights">
     <div className="insights-filter-panel">
       <div className="insights-filters">
         <div className="insights-search">
@@ -121,29 +125,33 @@ export default function StudentInsights({ students, assignments, onOpenStudent }
 
     <div className="register-section">
       <div className="section-heading">
-        <div className="section-title"><h2>Recorded absences</h2></div>
+        <div className="section-title"><h2>Reflection counts</h2></div>
         {hasFilters && <button type="button" className="text-button" onClick={clearFilters}>Clear filters</button>}
       </div>
       {rows.length ? <div className="table-scroll">
-        <table className="register-table student-absence-table">
-          <caption className="sr-only">Recorded absences by student and class</caption>
+        <table className="register-table student-insights-table">
+          <caption className="sr-only">Reflection assignments and attendance by student and class</caption>
           <thead>
             <tr>
               <th scope="col">Student</th>
               <th scope="col">Class</th>
-              <th scope="col" aria-sort="descending">Absences</th>
+              <th scope="col">Assigned</th>
+              <th scope="col">Present</th>
+              <th scope="col" aria-sort="descending">Absent</th>
             </tr>
           </thead>
           <tbody>
             {rows.map(student => <tr key={student.id}>
               <td><button type="button" className="student-name-link" onClick={() => onOpenStudent(student.id)}>{student.name}</button></td>
               <td>{student.className || "—"}</td>
-              <td><strong>{student.absences}</strong></td>
+              <td>{student.assigned}</td>
+              <td><strong className="insights-present-count">{student.present}</strong></td>
+              <td><strong className="insights-absent-count">{student.absent}</strong></td>
             </tr>)}
           </tbody>
         </table>
       </div> : <div className="empty-state insights-empty" role="status">
-        <h3>{hasFilters ? "No recorded absences match your filters" : "No recorded absences"}</h3>
+        <h3>{hasFilters ? "No reflections match your filters" : "No reflections assigned"}</h3>
       </div>}
     </div>
   </section>;
