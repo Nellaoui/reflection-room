@@ -1,17 +1,18 @@
 import type { AttendanceStatus, ReflectionSlot, StaffRole, StaffStatus } from "@/app/lib/reflection-validation";
+import { followUpsBySource } from "@/app/lib/follow-up-links";
 
 export type InsightStudent = { id: string; name: string; grade: string; className: string; active: boolean };
 export type InsightAssignment = {
   id: string; studentId: string; date: string; slot: ReflectionSlot;
   status: AttendanceStatus; assignedBy: string; createdAt: string;
-  rescheduledFromId: string | null; rescheduledToId: string | null; teacherId: string;
+  rescheduledFromId: string | null; rescheduledToId: string | null; rescheduledToIds?: string[]; teacherId: string;
 };
 export type InsightTeacher = {
   id: string; name: string; role: StaffRole | "historical";
   status: StaffStatus | "historical"; deleted: boolean;
 };
 
-type SourceAssignment = Omit<InsightAssignment, "rescheduledToId" | "teacherId"> & { createdByUserId: string };
+type SourceAssignment = Omit<InsightAssignment, "rescheduledToId" | "rescheduledToIds" | "teacherId"> & { createdByUserId: string };
 type SourceStaff = { id: string; name: string; role: StaffRole; status: StaffStatus; deletedAt: string | null; linkedUserId: string | null };
 type GoogleLink = { subject: string; memberId: string };
 
@@ -46,8 +47,7 @@ export async function insightAttribution(assignments: SourceAssignment[], staff:
   for (const member of staff) {
     if ((member.role === "teacher" || member.role === "moderator") && !member.deletedAt) includeMember(member);
   }
-  const replacements = new Map(assignments.filter(assignment => assignment.rescheduledFromId)
-    .map(assignment => [assignment.rescheduledFromId, assignment.id]));
+  const replacementsBySource = followUpsBySource(assignments);
   const historical = new Map<string, string>();
   const result: InsightAssignment[] = [];
   for (const assignment of assignments) {
@@ -67,12 +67,15 @@ export async function insightAttribution(assignments: SourceAssignment[], staff:
         role: "historical", status: "historical", deleted: false,
       });
     }
+    const replacements = replacementsBySource.get(assignment.id) ?? [];
     result.push({
       id: assignment.id, studentId: assignment.studentId, date: assignment.date,
       slot: assignment.slot, status: assignment.status,
       assignedBy: staffName(assignment.assignedBy, "Historical staff"), createdAt: assignment.createdAt,
       rescheduledFromId: assignment.rescheduledFromId,
-      rescheduledToId: replacements.get(assignment.id) ?? null, teacherId,
+      rescheduledToId: replacements[0]?.id ?? null,
+      ...(replacements.length > 1 ? { rescheduledToIds: replacements.map(replacement => replacement.id) } : {}),
+      teacherId,
     });
   }
   return {

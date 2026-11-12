@@ -3,6 +3,7 @@ import { getDb } from "@/db";
 import { appUsers, reflectionAssignments, staffGoogleIdentities, students, weeklyReportDeliveries } from "@/db/schema";
 import { buildWeeklyReport, isWeeklyReportWindow, reportWeek, weeklyReportReadiness, type ReportAssignment, type WeeklyReport } from "@/app/lib/weekly-report";
 import { insightAttribution } from "@/app/lib/reflection-insights";
+import { automaticFollowUpEvents, effectiveFollowUpSourceId } from "@/app/lib/follow-up-links";
 
 type ReportDb = ReturnType<typeof getDb>;
 type Environment = Record<string, string | undefined>;
@@ -15,7 +16,6 @@ const SAFE_RETRY_MS = 23 * 60 * 60_000;
 const assignmentFields = {
   id: reflectionAssignments.id, studentId: reflectionAssignments.studentId,
   date: reflectionAssignments.date, status: reflectionAssignments.status,
-  rescheduledFromId: reflectionAssignments.rescheduledFromId,
   cancelledAt: reflectionAssignments.cancelledAt,
   slot: reflectionAssignments.slot, assignedBy: reflectionAssignments.assignedBy,
   createdAt: reflectionAssignments.createdAt, createdByUserId: reflectionAssignments.createdByUserId,
@@ -27,8 +27,13 @@ export async function loadWeeklyReport(db: ReportDb, now: Date, appUrl: string):
   const period = reportWeek(now);
   const previousStart = new Date(`${period.start}T12:00:00Z`);
   previousStart.setUTCDate(previousStart.getUTCDate() - 7);
+  const followUpEvents = automaticFollowUpEvents(db);
+  const rescheduledFromId = effectiveFollowUpSourceId(followUpEvents);
+  const reportSessions = () => db.select({ ...assignmentFields, rescheduledFromId }).from(reflectionAssignments)
+    .leftJoin(students, eq(reflectionAssignments.studentId, students.id))
+    .leftJoin(followUpEvents, eq(followUpEvents.targetId, reflectionAssignments.id));
   const [sessions, staff, googleLinks] = await Promise.all([
-    db.select(assignmentFields).from(reflectionAssignments).leftJoin(students, eq(reflectionAssignments.studentId, students.id)).where(and(
+    reportSessions().where(and(
       gte(reflectionAssignments.date, previousStart.toISOString().slice(0, 10)), lte(reflectionAssignments.date, period.end), isNull(reflectionAssignments.cancelledAt),
     )),
     db.select({ id: appUsers.id, name: appUsers.name, role: appUsers.role, status: appUsers.status, deletedAt: appUsers.deletedAt, linkedUserId: appUsers.linkedUserId }).from(appUsers),
@@ -36,8 +41,8 @@ export async function loadWeeklyReport(db: ReportDb, now: Date, appUrl: string):
   ]);
   const replacements: typeof sessions = [];
   for (let index = 0; index < sessions.length; index += 90) {
-    replacements.push(...await db.select(assignmentFields).from(reflectionAssignments).leftJoin(students, eq(reflectionAssignments.studentId, students.id)).where(and(
-      inArray(reflectionAssignments.rescheduledFromId, sessions.slice(index, index + 90).map(item => item.id)), isNull(reflectionAssignments.cancelledAt),
+    replacements.push(...await reportSessions().where(and(
+      inArray(rescheduledFromId, sessions.slice(index, index + 90).map(item => item.id)), isNull(reflectionAssignments.cancelledAt),
     )));
   }
   const sourceRows = [...new Map([...sessions, ...replacements].map(row => [row.id, row])).values()];

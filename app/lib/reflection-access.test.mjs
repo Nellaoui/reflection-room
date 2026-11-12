@@ -216,7 +216,7 @@ async function missedFixture(h, status = "absent") {
   return { pupil, other, source: (await h.call("data")).data.assignments[0] };
 }
 
-test("an absence books the next free school lunch once and keeps the original teacher attribution", async (t) => {
+test("one absence books two available lunches and keeps the original teacher attribution", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-23T12:00:00Z") });
   const h = await harness();
   try {
@@ -227,56 +227,79 @@ test("an absence books the next free school lunch once and keeps the original te
     h.state.identity = h.owner;
     const first = await h.call("assignments/[id]", "PATCH", { status: "absent" }, source.id);
     assert.equal(first.status, 200);
-    assert.equal(first.data.followUp.date, "2026-10-29");
+    assert.deepEqual(first.data.followUps.map(row => row.date), ["2026-10-29", "2026-11-02"]);
+    assert.deepEqual(first.data.followUp, first.data.followUps[0]);
     t.mock.timers.tick(1000);
     const retry = await h.call("assignments/[id]", "PATCH", { status: "absent" }, source.id);
     assert.deepEqual(retry, first);
     const assignments = (await h.call("data")).data.assignments;
     const original = assignments.find(row => row.id === source.id);
-    const followUp = assignments.find(row => row.id === first.data.followUp.id);
+    const followUps = first.data.followUps.map(followUp => assignments.find(row => row.id === followUp.id));
     assert.equal(original.status, "absent");
     assert.equal(original.date, source.date);
-    assert.equal(original.rescheduledToId, followUp.id);
+    assert.equal(original.rescheduledToId, followUps[0].id);
+    assert.deepEqual(original.rescheduledToIds, followUps.map(row => row.id));
     assert.equal(original.canCorrectAttendance, true);
-    assert.equal(followUp.reason, source.reason);
-    assert.equal(followUp.assignedBy, source.assignedBy);
-    assert.equal(followUp.status, "pending");
-    assert.equal(followUp.slot, "lunch");
-    assert.equal(followUp.rescheduledFromId, source.id);
-    const saved = h.sqlite.prepare("SELECT created_by_user_id FROM reflection_assignments WHERE id = ?").get(followUp.id);
-    assert.equal(saved.created_by_user_id, h.teacher.userId);
+    for (const followUp of followUps) {
+      assert.equal(followUp.reason, source.reason);
+      assert.equal(followUp.assignedBy, source.assignedBy);
+      assert.equal(followUp.status, "pending");
+      assert.equal(followUp.slot, "lunch");
+      assert.equal(followUp.rescheduledFromId, source.id);
+      const saved = h.sqlite.prepare("SELECT created_by_user_id FROM reflection_assignments WHERE id = ?").get(followUp.id);
+      assert.equal(saved.created_by_user_id, h.teacher.userId);
+    }
+    const insights = (await h.call("insights")).data;
+    assert.equal(insights.students.find(row => row.id === pupil.id).className, "7A");
+    assert.equal(insights.assignments.filter(row => row.status === "absent").length, 1);
+    const sourceTeacherId = insights.assignments.find(row => row.id === source.id).teacherId;
+    assert.equal(insights.teachers.find(row => row.id === sourceTeacherId).name, source.assignedBy);
+    assert.deepEqual(insights.assignments.filter(row => row.rescheduledFromId === source.id)
+      .map(row => ({ id: row.id, teacherId: row.teacherId })), followUps.map(row => ({ id: row.id, teacherId: sourceTeacherId })));
     const activity = (await h.call("activity")).data.events;
     assert.equal(activity.filter(event => event.action === "attendance.recorded" && event.targetId === source.id).length, 1);
-    const automatic = activity.filter(event => event.action === "reflection.auto_rescheduled");
-    assert.equal(automatic.length, 1);
-    assert.equal(automatic[0].actorId, h.owner.memberId);
+    const automatic = activity.filter(event => ["reflection.auto_rescheduled", "reflection.auto_extra"].includes(event.action));
+    assert.equal(automatic.length, 2);
+    assert.ok(automatic.every(event => event.actorId === h.owner.memberId));
   } finally { h.close(); }
 });
 
-test("an attendance correction cancels its pending automatic follow-up and protects attended follow-ups", async (t) => {
+test("recording a past absence starts booking after today's lunch", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-02T13:00:00Z") });
+  const h = await harness();
+  try {
+    const { source } = await missedFixture(h, "pending");
+    const result = await h.call("assignments/[id]", "PATCH", { status: "absent" }, source.id);
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.data.followUps.map(row => row.date), ["2026-11-03", "2026-11-04"]);
+  } finally { h.close(); }
+});
+
+test("an attendance correction cancels both pending bookings and protects an attended extra", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-22T12:00:00Z") });
   const h = await harness();
   try {
     const { source } = await missedFixture(h, "pending");
-    const first = (await h.call("assignments/[id]", "PATCH", { status: "absent" }, source.id)).data.followUp;
+    const first = (await h.call("assignments/[id]", "PATCH", { status: "absent" }, source.id)).data.followUps;
     const corrected = await h.call("assignments/[id]", "PATCH", { status: "present" }, source.id);
     assert.equal(corrected.status, 200);
     assert.equal(corrected.data.followUpCancelled, true);
-    assert.ok(h.sqlite.prepare("SELECT cancelled_at FROM reflection_assignments WHERE id = ?").get(first.id).cancelled_at);
+    for (const row of first) assert.ok(h.sqlite.prepare("SELECT cancelled_at FROM reflection_assignments WHERE id = ?").get(row.id).cancelled_at);
     assert.equal((await h.call("data")).data.assignments.find(row => row.id === source.id).status, "present");
 
-    const second = (await h.call("assignments/[id]", "PATCH", { status: "absent" }, source.id)).data.followUp;
-    assert.notEqual(second.id, first.id);
-    assert.equal(second.date, first.date);
-    assert.equal((await h.call("assignments/[id]", "PATCH", { status: "present" }, second.id)).status, 200);
+    const second = (await h.call("assignments/[id]", "PATCH", { status: "absent" }, source.id)).data.followUps;
+    assert.notDeepEqual(second, first);
+    assert.deepEqual(second.map(row => row.date), first.map(row => row.date));
+    assert.equal((await h.call("assignments/[id]", "PATCH", { status: "present" }, second[1].id)).status, 200);
     assert.equal((await h.call("assignments/[id]", "PATCH", { status: "present" }, source.id)).status, 409);
     const assignments = (await h.call("data")).data.assignments;
     assert.equal(assignments.find(row => row.id === source.id).canCorrectAttendance, undefined);
-    assert.equal(assignments.find(row => row.id === second.id).status, "present");
+    assert.equal(assignments.find(row => row.id === second[0].id).status, "pending");
+    assert.equal(assignments.find(row => row.id === second[1].id).status, "present");
   } finally { h.close(); }
 });
 
-test("concurrent absent marks and a missed follow-up each create one replacement per missed session", async (t) => {
+test("concurrent absent marks book one pair and a missed follow-up keeps the original extra", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-22T12:00:00Z") });
   const h = await harness();
   try {
@@ -286,27 +309,73 @@ test("concurrent absent marks and a missed follow-up each create one replacement
       h.call("assignments/[id]", "PATCH", { status: "absent" }, source.id),
     ]);
     assert.deepEqual(first.map(result => result.status), [200, 200]);
-    assert.deepEqual(first[0].data.followUp, first[1].data.followUp);
-    const replacement = first[0].data.followUp;
+    assert.deepEqual(first[0].data.followUps, first[1].data.followUps);
+    const [replacement, extra] = first[0].data.followUps;
+    assert.deepEqual([replacement.date, extra.date], ["2026-10-26", "2026-10-29"]);
     t.mock.timers.tick(86400000);
     const missed = await h.call("assignments/[id]", "PATCH", { status: "absent" }, replacement.id);
     assert.equal(missed.status, 200);
-    assert.equal(missed.data.followUp.date, "2026-10-26");
-    assert.deepEqual((await h.call("data")).data.assignments.map(row => row.status), ["absent", "absent", "pending"]);
+    assert.deepEqual(missed.data.followUps.map(row => row.date), ["2026-11-02", "2026-11-03"]);
+    const assignments = (await h.call("data")).data.assignments;
+    assert.deepEqual(assignments.map(row => row.status), ["absent", "absent", "pending", "pending", "pending"]);
+    assert.equal(assignments.find(row => row.id === extra.id).rescheduledFromId, source.id);
   } finally { h.close(); }
 });
 
-test("attendance is saved when a student is archived or the verified calendar has no remaining date", async (t) => {
-  t.mock.timers.enable({ apis: ["Date"], now: new Date("2027-06-30T12:00:00Z") });
+test("a surviving extra prevents duplicate bookings, rescheduling and deleting the source", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-22T12:00:00Z") });
+  const h = await harness();
+  try {
+    const { source } = await missedFixture(h, "pending");
+    const [replacement, extra] = (await h.call("assignments/[id]", "PATCH", { status: "absent" }, source.id)).data.followUps;
+    assert.equal((await h.call("assignments/[id]", "DELETE", {}, replacement.id)).status, 200);
+    const retry = await h.call("assignments/[id]", "PATCH", { status: "absent" }, source.id);
+    assert.equal(retry.status, 200);
+    assert.deepEqual(retry.data.followUps, [extra]);
+    assert.equal((await h.call("assignments/[id]", "DELETE", {}, source.id)).status, 409);
+    assert.equal((await h.call("assignments/[id]/reschedule", "POST", { date: "2026-11-02", slot: "lunch" }, source.id)).status, 409);
+    const assignments = (await h.call("data")).data.assignments;
+    assert.equal(assignments.find(row => row.id === source.id).rescheduledToId, extra.id);
+    assert.equal(assignments.find(row => row.id === extra.id).rescheduledFromId, source.id);
+    assert.equal((await h.call("assignments/[id]", "PATCH", { status: "present" }, source.id)).status, 200);
+    assert.ok(h.sqlite.prepare("SELECT cancelled_at FROM reflection_assignments WHERE id = ?").get(extra.id).cancelled_at);
+  } finally { h.close(); }
+});
+
+test("retrying an absence with a historical single automatic booking keeps that booking", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-22T12:00:00Z") });
+  const h = await harness();
+  try {
+    const { source, pupil } = await missedFixture(h);
+    const historical = { id: "legacy-single-follow-up", date: "2026-10-23" };
+    h.sqlite.prepare(`INSERT INTO reflection_assignments
+      (id,student_id,date,slot,reason,assigned_by,status,created_at,updated_at,created_by_user_id,updated_by_user_id,rescheduled_from_id)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(historical.id, pupil.id, historical.date, "lunch", source.reason,
+      source.assignedBy, "pending", "2026-10-22", "2026-10-22", h.teacher.userId, h.teacher.userId, source.id);
+    h.sqlite.prepare(`INSERT INTO activity_events
+      (id,actor_id,actor_name,action,target_type,target_id,target_name,details,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?)`).run("legacy-auto-event", h.teacher.memberId, source.assignedBy,
+      "reflection.auto_rescheduled", "reflection", historical.id, pupil.name, "Historic automatic booking", "2026-10-22");
+    const retry = await h.call("assignments/[id]", "PATCH", { status: "absent" }, source.id);
+    assert.equal(retry.status, 200);
+    assert.deepEqual(retry.data.followUps, [historical]);
+    assert.equal(h.sqlite.prepare("SELECT count(*) AS n FROM reflection_assignments").get().n, 2);
+  } finally { h.close(); }
+});
+
+test("attendance is saved without bookings when only one eligible date remains or a student is archived", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2027-06-29T12:00:00Z") });
   const h = await harness();
   try {
     const { source, pupil } = await missedFixture(h, "pending");
-    h.sqlite.prepare("UPDATE reflection_assignments SET date = '2027-06-30' WHERE id = ?").run(source.id);
+    h.sqlite.prepare("UPDATE reflection_assignments SET date = '2027-06-29' WHERE id = ?").run(source.id);
     const atCalendarEnd = await h.call("assignments/[id]", "PATCH", { status: "absent" }, source.id);
     assert.equal(atCalendarEnd.status, 200);
     assert.equal(atCalendarEnd.data.followUp, null);
+    assert.deepEqual(atCalendarEnd.data.followUps, []);
     assert.equal(atCalendarEnd.data.followUpUnavailable, "calendar");
     assert.equal(h.sqlite.prepare("SELECT status FROM reflection_assignments WHERE id = ?").get(source.id).status, "absent");
+    assert.equal(h.sqlite.prepare("SELECT count(*) AS n FROM reflection_assignments").get().n, 1);
     await h.call("assignments/[id]", "PATCH", { status: "pending" }, source.id);
     h.sqlite.prepare("UPDATE students SET active = 0 WHERE id = ?").run(pupil.id);
     const archived = await h.call("assignments/[id]", "PATCH", { status: "absent" }, source.id);
@@ -317,19 +386,19 @@ test("attendance is saved when a student is archived or the verified calendar ha
   } finally { h.close(); }
 });
 
-test("a follow-up audit failure rolls back both the absence and replacement", async (t) => {
+test("an extra follow-up audit failure rolls back the absence and both bookings", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-22T12:00:00Z") });
   const h = await harness();
   const originalError = console.error;
   try {
     const { source } = await missedFixture(h, "pending");
     h.sqlite.exec(`CREATE TRIGGER reject_followup_audit BEFORE INSERT ON activity_events
-      WHEN NEW.action = 'reflection.auto_rescheduled' BEGIN SELECT RAISE(ABORT, 'test audit unavailable'); END`);
+      WHEN NEW.action = 'reflection.auto_extra' BEGIN SELECT RAISE(ABORT, 'test audit unavailable'); END`);
     console.error = () => {};
     assert.equal((await h.call("assignments/[id]", "PATCH", { status: "absent" }, source.id)).status, 500);
     assert.equal(h.sqlite.prepare("SELECT status FROM reflection_assignments WHERE id = ?").get(source.id).status, "pending");
     assert.equal(h.sqlite.prepare("SELECT count(*) AS n FROM reflection_assignments").get().n, 1);
-    assert.equal(h.sqlite.prepare("SELECT count(*) AS n FROM activity_events WHERE action = 'attendance.recorded'").get().n, 0);
+    assert.equal(h.sqlite.prepare("SELECT count(*) AS n FROM activity_events WHERE action IN ('attendance.recorded', 'reflection.auto_rescheduled')").get().n, 0);
   } finally { console.error = originalError; h.close(); }
 });
 
@@ -853,7 +922,7 @@ test("activity is administrator-only and records trusted actors across the refle
     assert.equal(original.assignedBy, "Confirmed Teacher");
     const absent = await h.call("assignments/[id]", "PATCH", { status: "absent", actorName: "Forged actor" }, original.id);
     assert.equal(absent.status, 200);
-    assert.equal(absent.data.followUp.date, "2026-10-23");
+    assert.equal(absent.data.followUp.date, "2026-10-26");
     await h.call("assignments/[id]", "DELETE", {}, absent.data.followUp.id);
     h.state.identity = h.owner;
     await h.call("students/[id]", "DELETE", {}, pupil.id);
@@ -861,7 +930,7 @@ test("activity is administrator-only and records trusted actors across the refle
     assert.equal(response.status, 200);
     assert.equal(response.data.limit, 300);
     const events = response.data.events;
-    assert.deepEqual(new Set(events.map(event => event.action)), new Set(["staff.created", "staff.updated", "student.created", "student.updated", "student.archived", "reflection.assigned", "attendance.recorded", "reflection.auto_rescheduled", "reflection.cancelled"]));
+    assert.deepEqual(new Set(events.map(event => event.action)), new Set(["staff.created", "staff.updated", "student.created", "student.updated", "student.archived", "reflection.assigned", "attendance.recorded", "reflection.auto_rescheduled", "reflection.auto_extra", "reflection.cancelled"]));
     assert.ok(events.every(event => event.createdAt.endsWith("Z") && !event.actorName.includes("Forged")));
     const teacherEvents = events.filter(event => event.targetType === "reflection");
     assert.ok(teacherEvents.every(event => event.actorId === teacher.id && event.actorName === "Confirmed Teacher" && event.targetName === "Audit Pupil"));
@@ -950,7 +1019,7 @@ test("moderators use teacher operations and insights but cannot read or mutate a
     assert.equal((await h.call("assignments/[id]", "DELETE", {}, absent.data.followUp.id)).status, 200);
     h.state.identity = h.owner;
     const logs = (await h.call("activity")).data.events.filter(event => event.actorId === moderator.memberId);
-    assert.deepEqual(new Set(logs.map(event => event.action)), new Set(["reflection.assigned", "attendance.recorded", "reflection.auto_rescheduled", "reflection.cancelled"]));
+    assert.deepEqual(new Set(logs.map(event => event.action)), new Set(["reflection.assigned", "attendance.recorded", "reflection.auto_rescheduled", "reflection.auto_extra", "reflection.cancelled"]));
     assert.ok(logs.every(event => event.actorName === "School Moderator"));
   } finally { h.close(); }
 });

@@ -217,6 +217,34 @@ test("report query attributes staff by identity, includes prior week comparisons
   } finally { h.close(); }
 });
 
+test("an extra automatic follow-up remains linked across weeks when the primary booking is cancelled", async () => {
+  const h = await harness();
+  try {
+    h.student("pupil-a", "7C");
+    h.assignment("source", { date: "2026-11-05", slot: "lunch" });
+    h.assignment("primary", { date: "2026-11-09", slot: "lunch", status: "pending", rescheduledFromId: "source" });
+    h.assignment("extra", { date: "2026-11-10", slot: "lunch", status: "pending" });
+    h.sqlite.prepare("UPDATE reflection_assignments SET cancelled_at = '2026-11-06T09:00:00Z' WHERE id = 'primary'").run();
+    const summary = "2026-11-05 → 2026-11-10 · Lunch break";
+    h.sqlite.prepare("INSERT INTO activity_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+      "extra-event", "owner-member", "Owner", "reflection.auto_extra", "reflection",
+      "extra", "Private pupil-a", JSON.stringify({ sourceId: "source", summary }), "2026-11-05T13:00:00Z",
+    );
+
+    const firstWeek = await h.service.loadWeeklyReport(h.db, friday, safeEnv.WEEKLY_REPORT_APP_URL);
+    assert.equal(firstWeek.metrics.absent, 1);
+    assert.equal(firstWeek.metrics.missedAwaitingFollowUp, 0);
+    assert.equal(firstWeek.tables.students[0].className, "7C");
+    const nextWeek = await h.service.loadWeeklyReport(h.db, new Date("2026-11-13T14:10:00Z"), safeEnv.WEEKLY_REPORT_APP_URL);
+    assert.equal(nextWeek.metrics.initial, 0);
+    assert.equal(nextWeek.metrics.followUps, 1);
+    assert.equal(nextWeek.tables.students[0].followUps, 1);
+    assert.equal(nextWeek.tables.teachers[0].followUps, 1);
+    const { data: activity } = await h.call("activity");
+    assert.equal(activity.events[0].details, summary);
+  } finally { h.close(); }
+});
+
 test("disabled or unconfigured sending and non-Friday times never create a delivery or call email provider", async () => {
   const h = await harness();
   try {

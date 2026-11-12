@@ -24,6 +24,7 @@ const activityLabels: Record<string, string> = {
   "reflection.cancelled": "Reflection removed",
   "reflection.rescheduled": "Reflection rescheduled",
   "reflection.auto_rescheduled": "Follow-up booked automatically",
+  "reflection.auto_extra": "Extra follow-up booked automatically",
   "attendance.recorded": "Attendance recorded",
 };
 

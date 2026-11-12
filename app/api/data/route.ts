@@ -1,15 +1,17 @@
-import { asc, eq, isNull, sql } from "drizzle-orm";
+import { asc, eq, isNull } from "drizzle-orm";
 import { getDb } from "@/db";
 import { appUsers, reflectionAssignments, rosterMetadata, students } from "@/db/schema";
 import { authenticatedApi, json } from "@/app/lib/reflection-api";
 import { publicUserFields } from "@/app/lib/reflection-membership";
-import { automaticFollowUpAction, canCancelAutomaticFollowUp } from "@/app/lib/automatic-follow-up";
+import { canCancelAutomaticFollowUp } from "@/app/lib/automatic-follow-up";
+import { automaticFollowUpEvents, effectiveFollowUpSourceId, followUpsBySource } from "@/app/lib/follow-up-links";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   return authenticatedApi(request, false, async (user) => {
     const db = getDb();
+    const followUpEvents = automaticFollowUpEvents(db);
     const [roster, assignments, metadata] = await Promise.all([
       db.select({ id: students.id, name: students.name, grade: students.grade, className: students.className, active: students.active, toddleId: students.toddleId })
         .from(students).orderBy(asc(students.grade), asc(students.className), asc(students.name)),
@@ -24,28 +26,26 @@ export async function GET(request: Request) {
         createdAt: reflectionAssignments.createdAt,
         attendanceRecordedBy: reflectionAssignments.attendanceRecordedBy,
         attendanceRecordedAt: reflectionAssignments.attendanceRecordedAt,
-        rescheduledFromId: reflectionAssignments.rescheduledFromId,
-        automaticFollowUp: sql<number>`${reflectionAssignments.rescheduledFromId} IS NOT NULL AND EXISTS (
-          SELECT 1 FROM activity_events event
-          WHERE event.target_id = reflection_assignments.id AND event.action = ${automaticFollowUpAction}
-        )`,
-      }).from(reflectionAssignments).where(isNull(reflectionAssignments.cancelledAt))
+        rescheduledFromId: effectiveFollowUpSourceId(followUpEvents),
+        automaticFollowUpId: followUpEvents.targetId,
+      }).from(reflectionAssignments).leftJoin(followUpEvents, eq(followUpEvents.targetId, reflectionAssignments.id))
+        .where(isNull(reflectionAssignments.cancelledAt))
         .orderBy(asc(reflectionAssignments.date), asc(reflectionAssignments.slot), asc(reflectionAssignments.createdAt)),
       db.select().from(rosterMetadata).where(eq(rosterMetadata.id, "roster")).limit(1),
     ]);
-    const replacementBySource = new Map(assignments.filter((assignment) => assignment.rescheduledFromId)
-      .map((assignment) => [assignment.rescheduledFromId, assignment]));
+    const replacementsBySource = followUpsBySource(assignments);
     return json({
       students: roster,
-      assignments: assignments.map(({ automaticFollowUp: _automaticFollowUp, ...assignment }) => {
-        const replacement = replacementBySource.get(assignment.id);
-        const correctable = replacement && canCancelAutomaticFollowUp(
-          Boolean(replacement.automaticFollowUp), replacement.status, replacement.attendanceRecordedAt,
-          replacementBySource.has(replacement.id),
-        );
+      assignments: assignments.map(({ automaticFollowUpId: _automaticFollowUpId, ...assignment }) => {
+        const replacements = replacementsBySource.get(assignment.id) ?? [];
+        const correctable = replacements.length > 0 && replacements.every(replacement => canCancelAutomaticFollowUp(
+          Boolean(replacement.automaticFollowUpId), replacement.status, replacement.attendanceRecordedAt,
+          replacementsBySource.has(replacement.id),
+        ));
         return {
           ...assignment,
-          rescheduledToId: replacement?.id ?? null,
+          rescheduledToId: replacements[0]?.id ?? null,
+          ...(replacements.length > 1 ? { rescheduledToIds: replacements.map(replacement => replacement.id) } : {}),
           ...(correctable ? { canCorrectAttendance: true } : {}),
         };
       }),

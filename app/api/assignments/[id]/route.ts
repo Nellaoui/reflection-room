@@ -5,11 +5,13 @@ import { ApiError, authenticatedApi, json, readJson } from "@/app/lib/reflection
 import { attendanceInput, validId } from "@/app/lib/reflection-validation";
 import { activityStatement } from "@/app/lib/reflection-activity";
 import { recordReflectionAttendance } from "@/app/lib/automatic-follow-up";
+import { activeExtraFollowUpExists } from "@/app/lib/follow-up-links";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
 function noActiveReplacement(id: string) {
-  return sql`NOT EXISTS (SELECT 1 FROM reflection_assignments child WHERE child.rescheduled_from_id = ${id} AND child.cancelled_at IS NULL)`;
+  return sql`NOT EXISTS (SELECT 1 FROM reflection_assignments child WHERE child.rescheduled_from_id = ${id} AND child.cancelled_at IS NULL)
+    AND NOT ${activeExtraFollowUpExists(id)}`;
 }
 
 function reflectionName(id: string) {

@@ -15,6 +15,10 @@ function formatRecordedAt(value?: string | null) {
 
 function assignmentAnchor(id: string) { return `reflection-history-${encodeURIComponent(id)}`; }
 
+export function followUpIds(assignment: Pick<Assignment, "rescheduledToId" | "rescheduledToIds">) {
+  return assignment.rescheduledToIds ?? (assignment.rescheduledToId ? [assignment.rescheduledToId] : []);
+}
+
 export default function StudentProfile({ student, assignments, onClose, mode = "full" }: { student: Student; assignments: Assignment[]; onClose: () => void; mode?: "full" | "history" | "insights" }) {
   const history = useMemo(() => assignments.filter(item => item.studentId === student.id).sort((a, b) => b.date.localeCompare(a.date) || (a.slot === b.slot ? 0 : a.slot === "lunch" ? -1 : 1) || (b.createdAt || "").localeCompare(a.createdAt || "") || a.id.localeCompare(b.id)), [student.id, assignments]);
   const metrics = sessionMetrics(history);
@@ -24,7 +28,7 @@ export default function StudentProfile({ student, assignments, onClose, mode = "
 
   function linkedSession(id: string, direction: "from" | "to") {
     const linked = byId.get(id);
-    return <div className="student-profile-reschedule"><History size={12} aria-hidden="true"/><span>Rescheduled {direction} {linked ? <a href={`#${assignmentAnchor(id)}`}>{formatSessionDate(linked.date)} · {linked.slot === "morning" ? "Morning break" : "Lunch break"}</a> : <span>session unavailable</span>}</span></div>;
+    return <div key={`${direction}-${id}`} className="student-profile-reschedule"><History size={12} aria-hidden="true"/><span>Rescheduled {direction} {linked ? <a href={`#${assignmentAnchor(id)}`}>{formatSessionDate(linked.date)} · {linked.slot === "morning" ? "Morning break" : "Lunch break"}</a> : <span>session unavailable</span>}</span></div>;
   }
 
   return <Modal title={student.name} subtitle={`${student.grade || "No grade"} · ${student.className || "No class"} · ${showMetrics ? "Student profile" : "Reflection history"}`} onClose={onClose} wide>
@@ -37,12 +41,12 @@ export default function StudentProfile({ student, assignments, onClose, mode = "
       <div className="student-profile-history-heading"><h3><History size={17}/>Reflection history</h3><span>{history.length} {history.length === 1 ? "session" : "sessions"} · Newest first</span></div>
       <AttendanceLegend/>
       {!history.length ? <div className="student-profile-empty"><CalendarDays size={30} strokeWidth={1.4}/><h3>No reflection sessions yet</h3><p>Assignments and attendance will appear here when a reflection is assigned to this student.</p></div> : <div className="student-profile-history-scroll"><table className={`student-profile-history ${insightsOnly ? "insight-profile-history" : ""}`}><caption className="sr-only">Complete reflection session history for {student.name}, newest first. Rescheduled sessions retain their original attendance record.</caption><thead><tr><th scope="col">Date & session</th><th scope="col">Status</th><th scope="col">{insightsOnly ? "Assigned by" : "Reason & assignment"}</th>{!insightsOnly && <th scope="col">Attendance record</th>}</tr></thead><tbody>{history.map(assignment => <tr key={assignment.id} id={assignmentAnchor(assignment.id)}>
-        <td><strong className="student-profile-date">{formatSessionDate(assignment.date)}</strong><span className={`student-profile-slot ${assignment.slot}`} aria-label={`${assignment.slot === "morning" ? "Morning" : "Lunch"} break reflection`}>{assignment.slot === "morning" ? <Sun size={13}/> : <Moon size={12}/>} {assignment.slot === "morning" ? "Morning break" : "Lunch break"}</span>{assignment.rescheduledFromId && linkedSession(assignment.rescheduledFromId, "from")}{assignment.rescheduledToId && linkedSession(assignment.rescheduledToId, "to")}</td>
-        <td><span className={`student-profile-status ${assignment.status}`}>{assignment.status === "present" ? <Check size={12}/> : assignment.status === "absent" ? <X size={12}/> : <Clock3 size={12}/>} {assignment.status === "present" ? "Present" : assignment.status === "absent" ? "Absent" : "Pending"}</span>{assignment.rescheduledToId && <span className="student-profile-retained-note">Original record retained</span>}</td>
+        <td><strong className="student-profile-date">{formatSessionDate(assignment.date)}</strong><span className={`student-profile-slot ${assignment.slot}`} aria-label={`${assignment.slot === "morning" ? "Morning" : "Lunch"} break reflection`}>{assignment.slot === "morning" ? <Sun size={13}/> : <Moon size={12}/>} {assignment.slot === "morning" ? "Morning break" : "Lunch break"}</span>{assignment.rescheduledFromId && linkedSession(assignment.rescheduledFromId, "from")}{followUpIds(assignment).map(id => linkedSession(id, "to"))}</td>
+        <td><span className={`student-profile-status ${assignment.status}`}>{assignment.status === "present" ? <Check size={12}/> : assignment.status === "absent" ? <X size={12}/> : <Clock3 size={12}/>} {assignment.status === "present" ? "Present" : assignment.status === "absent" ? "Absent" : "Pending"}</span>{followUpIds(assignment).length > 0 && <span className="student-profile-retained-note">Original record retained</span>}</td>
         <td>{!insightsOnly && <p className="student-profile-reason">{assignment.reason?.trim() || "No reason recorded"}</p>}<span className="student-profile-attribution">{insightsOnly ? "" : "Assigned by "}{assignment.assignedBy?.trim() || "Staff member not recorded"}</span>{assignment.createdAt && <span className="student-profile-timestamp">{formatRecordedAt(assignment.createdAt)}</span>}</td>
         {!insightsOnly && <td>{assignment.attendanceRecordedBy || assignment.attendanceRecordedAt ? <><span className="student-profile-recorder">{assignment.attendanceRecordedBy || "Staff member not recorded"}</span>{assignment.attendanceRecordedAt && <span className="student-profile-timestamp">{formatRecordedAt(assignment.attendanceRecordedAt)}</span>}</> : <span className="student-profile-no-record">{assignment.status === "pending" ? "Awaiting attendance" : "Recorder not available"}</span>}</td>}
       </tr>)}</tbody></table></div>}
-      {!!history.some(assignment => assignment.rescheduledFromId || assignment.rescheduledToId) && <p className="student-profile-history-note"><History size={13}/>Rescheduling adds a linked session. Earlier attendance records, including absences, stay in the history.</p>}
+      {history.some(assignment => assignment.rescheduledFromId || followUpIds(assignment).length > 0) && <p className="student-profile-history-note"><History size={13}/>Follow-up sessions link to the original absence.</p>}
     </div>
     <div className="modal-footer student-profile-footer"><span>Each row is one reflection session.</span><button className="button secondary" onClick={onClose}>Close {showMetrics ? "profile" : "history"}</button></div>
   </Modal>;
