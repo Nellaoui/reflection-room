@@ -1,8 +1,9 @@
-import { asc, eq, isNull } from "drizzle-orm";
+import { asc, eq, isNull, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { appUsers, reflectionAssignments, rosterMetadata, students } from "@/db/schema";
 import { authenticatedApi, json } from "@/app/lib/reflection-api";
 import { publicUserFields } from "@/app/lib/reflection-membership";
+import { automaticFollowUpAction, canCancelAutomaticFollowUp } from "@/app/lib/automatic-follow-up";
 
 export const dynamic = "force-dynamic";
 
@@ -24,15 +25,30 @@ export async function GET(request: Request) {
         attendanceRecordedBy: reflectionAssignments.attendanceRecordedBy,
         attendanceRecordedAt: reflectionAssignments.attendanceRecordedAt,
         rescheduledFromId: reflectionAssignments.rescheduledFromId,
+        automaticFollowUp: sql<number>`${reflectionAssignments.rescheduledFromId} IS NOT NULL AND EXISTS (
+          SELECT 1 FROM activity_events event
+          WHERE event.target_id = reflection_assignments.id AND event.action = ${automaticFollowUpAction}
+        )`,
       }).from(reflectionAssignments).where(isNull(reflectionAssignments.cancelledAt))
         .orderBy(asc(reflectionAssignments.date), asc(reflectionAssignments.slot), asc(reflectionAssignments.createdAt)),
       db.select().from(rosterMetadata).where(eq(rosterMetadata.id, "roster")).limit(1),
     ]);
     const replacementBySource = new Map(assignments.filter((assignment) => assignment.rescheduledFromId)
-      .map((assignment) => [assignment.rescheduledFromId, assignment.id]));
+      .map((assignment) => [assignment.rescheduledFromId, assignment]));
     return json({
       students: roster,
-      assignments: assignments.map((assignment) => ({ ...assignment, rescheduledToId: replacementBySource.get(assignment.id) ?? null })),
+      assignments: assignments.map(({ automaticFollowUp: _automaticFollowUp, ...assignment }) => {
+        const replacement = replacementBySource.get(assignment.id);
+        const correctable = replacement && canCancelAutomaticFollowUp(
+          Boolean(replacement.automaticFollowUp), replacement.status, replacement.attendanceRecordedAt,
+          replacementBySource.has(replacement.id),
+        );
+        return {
+          ...assignment,
+          rescheduledToId: replacement?.id ?? null,
+          ...(correctable ? { canCorrectAttendance: true } : {}),
+        };
+      }),
       meta: {
         rosterSource: metadata[0]?.source ?? null,
         rosterImportedAt: metadata[0]?.importedAt ?? null,

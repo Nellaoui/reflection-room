@@ -4,6 +4,7 @@ import { reflectionAssignments } from "@/db/schema";
 import { ApiError, authenticatedApi, json, readJson } from "@/app/lib/reflection-api";
 import { attendanceInput, validId } from "@/app/lib/reflection-validation";
 import { activityStatement } from "@/app/lib/reflection-activity";
+import { recordReflectionAttendance } from "@/app/lib/automatic-follow-up";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -30,21 +31,7 @@ export async function PATCH(request: Request, context: RouteContext) {
   return authenticatedApi(request, true, async (user) => {
     const id = validId((await context.params).id);
     const status = attendanceInput(await readJson(request));
-    const recordedAt = new Date().toISOString();
-    const db = getDb();
-    const [result] = await db.batch([db.update(reflectionAssignments).set({
-      status,
-      updatedAt: recordedAt,
-      updatedByUserId: user.userId,
-      attendanceRecordedBy: user.displayName,
-      attendanceRecordedAt: recordedAt,
-    }).where(and(eq(reflectionAssignments.id, id), isNull(reflectionAssignments.cancelledAt), noActiveReplacement(id)))
-      .returning({ id: reflectionAssignments.id }), activityStatement(user, {
-        action: "attendance.recorded", targetType: "reflection", targetId: id, targetName: reflectionName(id),
-        details: sql`${`Marked ${status} · `} || ${reflectionDetails(id)}`, createdAt: recordedAt,
-      }, true)]);
-    if (!result.length) await assignmentMutationError(id);
-    return json({ ok: true, attendanceRecordedBy: user.displayName, attendanceRecordedAt: recordedAt });
+    return json({ ok: true, ...await recordReflectionAttendance(getDb(), user, id, status) });
   });
 }
 
