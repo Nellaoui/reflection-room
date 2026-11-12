@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CalendarDays, ChevronDown, X } from "lucide-react";
 import { DayPicker, labelDayButton } from "react-day-picker";
-import { schoolCalendar, schoolDayClosure } from "@/app/lib/school-calendar";
+import { schoolCalendar, reflectionDayClosure } from "@/app/lib/school-calendar";
 import "react-day-picker/style.css";
 import "./school-date-picker.css";
 
@@ -28,7 +28,7 @@ export default function SchoolDatePicker({ id, label, value, onChange, min, disa
   const maximum = schoolCalendar.endDate;
   const rangeUnavailable = minimum > maximum;
   const selected = value ? asDate(value) : undefined;
-  const closure = value ? schoolDayClosure(value) : null;
+  const closure = value ? reflectionDayClosure(value) : null;
   const displayDate = selected && Number.isFinite(selected.getTime())
     ? selected.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "long", year: "numeric" })
     : "Choose a school day";
@@ -36,7 +36,7 @@ export default function SchoolDatePicker({ id, label, value, onChange, min, disa
   const initialMonth = asDate(preferredMonth < minimum ? minimum : preferredMonth > maximum ? maximum : preferredMonth);
   const blocked = (date: Date) => {
     const dateString = dateValue(date);
-    return dateString < minimum || dateString > maximum || !!schoolDayClosure(dateString);
+    return dateString < minimum || dateString > maximum || !!reflectionDayClosure(dateString);
   };
 
   useEffect(() => {
@@ -57,7 +57,7 @@ export default function SchoolDatePicker({ id, label, value, onChange, min, disa
       disabled={disabled || rangeUnavailable} onClick={() => setOpen(current => !current)}>
       <CalendarDays size={18} aria-hidden="true"/><span>{displayDate}</span><ChevronDown size={16} aria-hidden="true"/>
     </button>
-    <p id={`${id}-description`} className="school-date-note">{rangeUnavailable ? "No school dates are available after this session in the current calendar." : "Weekends and school holidays are unavailable."}</p>
+    <p id={`${id}-description`} className="school-date-note">{rangeUnavailable ? "No reflection dates are available after this session in the current calendar." : "Fridays, weekends and school holidays are unavailable."}</p>
     {closure && <p className="form-error" role="alert">{closure}</p>}
     {open && !rangeUnavailable && <div id={`${id}-calendar`} className="school-date-panel" role="dialog" aria-label={`${label} calendar`}>
       <div className="school-date-panel-heading"><strong>School calendar</strong><button type="button" className="icon-button" aria-label="Close school calendar" onClick={close}><X size={17}/></button></div>
@@ -65,7 +65,7 @@ export default function SchoolDatePicker({ id, label, value, onChange, min, disa
         defaultMonth={initialMonth} selected={selected} startMonth={asDate(minimum)} endMonth={asDate(maximum)}
         disabled={blocked} showOutsideDays={false}
         labels={{ labelDayButton: (date, modifiers, options, dateLib) => {
-          const description = schoolDayClosure(dateValue(date));
+          const description = reflectionDayClosure(dateValue(date));
           const existing = labelDayButton(date, modifiers, options, dateLib);
           return description ? `${existing}. ${description}` : existing;
         } }}

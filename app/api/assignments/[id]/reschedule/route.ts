@@ -5,7 +5,7 @@ import { ApiError, authenticatedApi, json, readJson } from "@/app/lib/reflection
 import { isUniqueConstraintError } from "@/app/lib/reflection-errors";
 import { rescheduleInput, validId } from "@/app/lib/reflection-validation";
 import { activityStatement, sessionLabel } from "@/app/lib/reflection-activity";
-import { schoolDayClosure } from "@/app/lib/school-calendar";
+import { reflectionDayClosure } from "@/app/lib/school-calendar";
 import { activeExtraFollowUpExists } from "@/app/lib/follow-up-links";
 
 type RouteContext = { params: Promise<{ id: string }> };
@@ -28,7 +28,7 @@ export async function POST(request: Request, context: RouteContext) {
     if (!source.studentActive) throw new ApiError(400, "This student is archived. Ask an administrator to restore the student first.");
     if (input.date < source.date) throw new ApiError(400, "The replacement date cannot be before the original reflection.");
     if (input.date === source.date && input.slot === source.slot) throw new ApiError(409, "Choose a later school day for the replacement lunch session.");
-    const closed = schoolDayClosure(input.date);
+    const closed = reflectionDayClosure(input.date);
     if (closed) throw new ApiError(400, closed);
 
     const id = crypto.randomUUID();

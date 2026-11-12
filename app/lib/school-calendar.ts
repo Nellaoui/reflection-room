@@ -48,9 +48,24 @@ export function isSchoolDay(date: string, calendar: SchoolCalendar = schoolCalen
   return schoolDayClosure(date, calendar) === null;
 }
 
+export function reflectionDayClosure(date: string, calendar: SchoolCalendar = schoolCalendar): string | null {
+  const closure = schoolDayClosure(date, calendar);
+  if (closure) return closure;
+  const weekday = new Date(`${date}T00:00:00.000Z`).getUTCDay();
+  return weekday >= 1 && weekday <= 4 ? null : "Lunch reflections run Monday through Thursday.";
+}
+
+export function nextReflectionDay(date: string, includeCurrent = false, calendar: SchoolCalendar = schoolCalendar): string | null {
+  return findCalendarDay(date, 1, includeCurrent, calendar, value => reflectionDayClosure(value, calendar) === null);
+}
+
+export function nextSchoolDay(date: string, direction: 1 | -1 = 1, includeCurrent = false, calendar: SchoolCalendar = schoolCalendar): string | null {
+  return findCalendarDay(date, direction, includeCurrent, calendar, value => isSchoolDay(value, calendar));
+}
+
 // Search in one direction and stop at the verified boundary. The cap is a
 // defensive bound for malformed calendar configuration, not a guessed holiday.
-export function nextSchoolDay(date: string, direction: 1 | -1 = 1, includeCurrent = false, calendar: SchoolCalendar = schoolCalendar): string | null {
+function findCalendarDay(date: string, direction: 1 | -1, includeCurrent: boolean, calendar: SchoolCalendar, isAvailable: (value: string) => boolean): string | null {
   const timestamp = dateTimestamp(date);
   if (timestamp === null || !calendarIsUsable(calendar) || (direction !== 1 && direction !== -1)) return null;
   let candidate = timestamp + (includeCurrent ? 0 : direction * dayMilliseconds);
@@ -60,7 +75,7 @@ export function nextSchoolDay(date: string, direction: 1 | -1 = 1, includeCurren
   if (direction === -1 && candidate > end) candidate = end;
   for (let checked = 0; checked < 3660 && candidate >= start && candidate <= end; checked++, candidate += direction * dayMilliseconds) {
     const value = new Date(candidate).toISOString().slice(0, 10);
-    if (isSchoolDay(value, calendar)) return value;
+    if (isAvailable(value)) return value;
   }
   return null;
 }

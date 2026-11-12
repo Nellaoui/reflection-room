@@ -6,13 +6,8 @@ import { sessionLabel } from "@/app/lib/reflection-activity";
 import { ApiError } from "@/app/lib/reflection-errors";
 import type { StaffUser } from "@/app/lib/reflection-membership";
 import type { AttendanceStatus } from "@/app/lib/reflection-validation";
-import { nextSchoolDay, schoolCalendar } from "@/app/lib/school-calendar";
+import { nextReflectionDay } from "@/app/lib/school-calendar";
 import { casablancaClock } from "@/app/lib/weekly-report";
-
-const followUpCalendar = {
-  ...schoolCalendar,
-  closedWeekdays: [...new Set([...schoolCalendar.closedWeekdays, 0, 5, 6])],
-};
 
 type FollowUp = { id: string; date: string };
 type AttendanceResult = {
@@ -35,7 +30,7 @@ export function canCancelAutomaticFollowUp(
 
 async function availableLunches(transaction: Transaction, studentId: string, sourceDate: string, today: string) {
   const afterDate = sourceDate < today ? today : sourceDate;
-  let date = nextSchoolDay(afterDate, 1, false, followUpCalendar);
+  let date = nextReflectionDay(afterDate);
   if (!date) return null;
 
   const { rows } = await transaction.execute({
@@ -50,7 +45,7 @@ async function availableLunches(transaction: Transaction, studentId: string, sou
       dates.push(date);
       if (dates.length === 2) return dates;
     }
-    date = nextSchoolDay(date, 1, false, followUpCalendar);
+    date = nextReflectionDay(date);
   }
   return null;
 }

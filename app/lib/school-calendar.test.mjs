@@ -19,7 +19,7 @@ const compiled = ts.transpileModule(readFileSync(new URL("./school-calendar.ts",
 }).outputText;
 const loaded = { exports: {} };
 new Function("require", "module", "exports", compiled)(name => name === "./casa-school-calendar.json" ? fixtureCalendar : require(name), loaded, loaded.exports);
-const { schoolDayClosure, isSchoolDay, nextSchoolDay } = loaded.exports;
+const { schoolDayClosure, isSchoolDay, nextSchoolDay, reflectionDayClosure, nextReflectionDay } = loaded.exports;
 
 test("school holidays are inclusive and weekends are unavailable", () => {
   assert.equal(schoolDayClosure("2026-10-23"), null);
@@ -35,6 +35,17 @@ test("next school day skips a complete holiday and adjoining weekends in both di
   assert.equal(nextSchoolDay("2026-11-02", -1), "2026-10-23");
   assert.equal(nextSchoolDay("2026-11-02", 1, true), "2026-11-02");
   assert.equal(nextSchoolDay("2026-12-18"), "2027-01-04");
+});
+
+test("reflection dates skip Fridays, weekends and holidays even when Friday is a school day", () => {
+  assert.equal(reflectionDayClosure("2026-10-22"), null);
+  assert.match(reflectionDayClosure("2026-10-23"), /Monday through Thursday/);
+  assert.match(reflectionDayClosure("2026-10-24"), /weekends/);
+  assert.match(reflectionDayClosure("2026-10-25"), /weekends/);
+  assert.match(reflectionDayClosure("2026-10-26"), /Fixture half term/);
+  assert.equal(nextReflectionDay("2026-10-22"), "2026-11-02");
+  assert.equal(nextReflectionDay("2026-11-06", true), "2026-11-09");
+  assert.equal(nextReflectionDay("2026-11-09", true), "2026-11-09");
 });
 
 test("unverified dates and invalid date strings fail closed", () => {

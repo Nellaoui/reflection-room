@@ -5,12 +5,12 @@ import { ApiError, authenticatedApi, json, readJson } from "@/app/lib/reflection
 import { assignmentInput, chunks } from "@/app/lib/reflection-validation";
 import { isUniqueConstraintError } from "@/app/lib/reflection-errors";
 import { activityRowsStatement, sessionLabel } from "@/app/lib/reflection-activity";
-import { schoolDayClosure } from "@/app/lib/school-calendar";
+import { reflectionDayClosure } from "@/app/lib/school-calendar";
 
 export async function POST(request: Request) {
   return authenticatedApi(request, true, async (user) => {
     const input = assignmentInput(await readJson(request), user.displayName);
-    const closed = schoolDayClosure(input.date);
+    const closed = reflectionDayClosure(input.date);
     if (closed) throw new ApiError(400, closed);
     const db = getDb();
     const knownIds = new Set<string>();
@@ -62,7 +62,7 @@ export async function POST(request: Request) {
     const auditStatements = chunks(rows, 10).map(group => activityRowsStatement(user, group.map(row => ({
       action: "reflection.assigned", targetType: "reflection", targetId: row.id,
       targetName: sql`(SELECT name FROM students WHERE id = ${row.studentId})`,
-      details: `${row.date} · ${sessionLabel(row.slot)}`, createdAt: now,
+      details: `${row.date} · ${sessionLabel(row.slot)} · Chance, Choice and Consequence confirmed`, createdAt: now,
     }))));
     // D1 batches commit together, so a failed request does not leave half a register.
     try {
