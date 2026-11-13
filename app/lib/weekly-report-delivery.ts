@@ -4,6 +4,7 @@ import { appUsers, reflectionAssignments, staffGoogleIdentities, students, weekl
 import { buildWeeklyReport, isWeeklyReportWindow, reportWeek, weeklyReportReadiness, type ReportAssignment, type WeeklyReport } from "@/app/lib/weekly-report";
 import { insightAttribution } from "@/app/lib/reflection-insights";
 import { automaticFollowUpEvents, effectiveFollowUpSourceId } from "@/app/lib/follow-up-links";
+import { reflectionReasonCategory } from "@/app/lib/reflection-reasons";
 
 type ReportDb = ReturnType<typeof getDb>;
 type Environment = Record<string, string | undefined>;
@@ -19,7 +20,8 @@ const assignmentFields = {
   cancelledAt: reflectionAssignments.cancelledAt,
   slot: reflectionAssignments.slot, assignedBy: reflectionAssignments.assignedBy,
   createdAt: reflectionAssignments.createdAt, createdByUserId: reflectionAssignments.createdByUserId,
-  reasonRecorded: sql<boolean>`CASE WHEN length(trim(${reflectionAssignments.reason})) > 0 THEN 1 ELSE 0 END`.mapWith(Boolean),
+  reasonCategory: sql`CASE WHEN length(trim(${reflectionAssignments.reason})) > 0 THEN ${reflectionAssignments.reason} END`
+    .mapWith((value: string | null) => value === null ? null : reflectionReasonCategory(value)),
   grade: students.grade, className: students.className, studentName: students.name,
 };
 
@@ -54,7 +56,8 @@ export async function loadWeeklyReport(db: ReportDb, now: Date, appUrl: string):
     rescheduledFromId: assignment.rescheduledFromId, teacherId: assignment.teacherId,
     grade: sourceById.get(assignment.id)?.grade || undefined,
     className: sourceById.get(assignment.id)?.className || undefined,
-    reasonRecorded: sourceById.get(assignment.id)?.reasonRecorded,
+    reasonRecorded: sourceById.get(assignment.id)?.reasonCategory != null,
+    reasonCategory: sourceById.get(assignment.id)?.reasonCategory ?? undefined,
     studentName: sourceById.get(assignment.id)?.studentName || undefined,
     teacherName: teacherById.get(assignment.teacherId)?.name,
   }));

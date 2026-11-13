@@ -4,6 +4,7 @@ export type ReportAssignment = {
   status: "pending" | "present" | "absent";
   rescheduledFromId?: string | null; cancelledAt?: string | null;
   teacherId?: string; grade?: string; className?: string; reasonRecorded?: boolean;
+  reasonCategory?: string;
   studentName?: string; teacherName?: string;
 };
 export type WeeklyReportMetrics = {
@@ -16,6 +17,7 @@ export type WeeklyReport = {
   weekKey: string;
   period: { start: string; end: string; label: string; asOf: string; timeZone: string };
   metrics: WeeklyReportMetrics;
+  behaviourReasons: { reason: string; count: number }[];
   patterns: {
     classes: { grade: string; className: string; initial: number; students: number; absent: number }[];
     grades: { grade: string; initial: number; absent: number }[];
@@ -126,6 +128,13 @@ export function buildWeeklyReport(assignments: ReportAssignment[], { now = new D
   const followedUp = new Set(active.map(assignment => assignment.rescheduledFromId).filter(Boolean));
   const followUps = sessions.filter(assignment => !!assignment.rescheduledFromId).length;
   const initialSessions = sessions.filter(assignment => !assignment.rescheduledFromId);
+  const reasonCounts = new Map<string, number>();
+  for (const { reasonCategory, reasonRecorded } of initialSessions) {
+    if (!reasonCategory || reasonRecorded === false) continue;
+    reasonCounts.set(reasonCategory, (reasonCounts.get(reasonCategory) ?? 0) + 1);
+  }
+  const behaviourReasons = [...reasonCounts].map(([reason, count]) => ({ reason, count }))
+    .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason, "en"));
   const byStudent = new Map<string, { name: string; grade: string; className: string; initialDates: Set<string>; initial: number; followUps: number; present: number; absent: number; pending: number; missedAwaitingFollowUp: number }>();
   const byTeacher = new Map<string, number>();
   const teacherRows = new Map<string, { name: string; initial: number; students: Set<string>; followUps: number; present: number; absent: number; pending: number }>();
@@ -198,6 +207,9 @@ export function buildWeeklyReport(assignments: ReportAssignment[], { now = new D
   const subject = `Reflection Room — Weekly behaviour insights | ${period.label}`;
   const change = (value: number) => value > 0 ? `+${value}` : String(value);
   const classSummary = patterns.classes.length ? patterns.classes.map(row => `${row.grade} / ${row.className}: ${row.initial} initial, ${row.absent} absent`).join("; ") : "No class patterns recorded";
+  const reasonsTitle = "Behaviour reasons";
+  const reasonsNote = "Counts are based on original reflections scheduled this week.";
+  const noReasons = "No behaviour reasons were recorded for original reflections this week.";
   const lines = [
     "Dear Mr Philip and Phase Leaders,", "",
     `Here are this week’s reflection patterns to support follow-up, as of ${period.asOf} Casablanca:`, "",
@@ -214,6 +226,9 @@ export function buildWeeklyReport(assignments: ReportAssignment[], { now = new D
     ...(metrics.initialSessionsWithoutReason ? [`• ${counted(metrics.initialSessionsWithoutReason, "initial session")} ${metrics.initialSessionsWithoutReason === 1 ? "has" : "have"} no reason recorded.`] : []), "",
     "Suggested next steps",
     ...(suggestedActions.length ? suggestedActions.map(action => `• ${action}`) : ["No reflection sessions are recorded for this reporting week."]), "",
+    reasonsTitle,
+    reasonsNote,
+    ...(behaviourReasons.length ? behaviourReasons.map(({ reason, count }) => `${reason} | ${count}`) : [noReasons]), "",
     "Student records for review (all students with sessions this week)",
     ...(tables.students.length ? tables.students.map(student => `${student.name} | ${student.grade} / ${student.className} | Initial: ${student.initial}; initial session days: ${student.referralDays}; follow-ups: ${student.followUps} | Present: ${student.present}; absent: ${student.absent}; pending: ${student.pending}; awaiting follow-up: ${student.missedAwaitingFollowUp}`) : ["No student sessions recorded this week."]), "",
     "Teacher assignment overview",
@@ -226,10 +241,16 @@ export function buildWeeklyReport(assignments: ReportAssignment[], { now = new D
   const text = lines.join("\n");
   const cell = "padding:12px;border:1px solid #dfe7d5;vertical-align:top;font-size:14px;line-height:1.7;overflow-wrap:anywhere";
   const heading = `${cell};background:#edf4e7;color:#173c2a;text-align:left`;
+  const reasonRows = behaviourReasons.map(({ reason, count }) =>
+    `<tr><th scope="row" style="${cell};text-align:left;font-weight:normal">${escapeHtml(reason)}</th><td style="${cell};text-align:right">${count}</td></tr>`).join("");
+  const reasonTable = reasonRows
+    ? `<table aria-label="${reasonsTitle}" style="width:100%;border-collapse:collapse"><thead><tr><th scope="col" style="${heading}">Reason</th><th scope="col" style="${heading};text-align:right">Count</th></tr></thead><tbody>${reasonRows}</tbody></table>`
+    : `<p>${noReasons}</p>`;
+  const reasonSection = `<h2 style="font-size:20px">${reasonsTitle}</h2><p>${reasonsNote}</p>${reasonTable}`;
   const studentTable = tables.students.length ? `<table aria-label="Student records for review" style="width:100%;border-collapse:collapse;table-layout:fixed"><thead><tr><th scope="col" style="${heading}">Student</th><th scope="col" style="${heading}">Reflections</th><th scope="col" style="${heading}">Attendance and follow-up</th></tr></thead><tbody>${tables.students.map(student => `<tr><th scope="row" style="${cell};text-align:left;font-weight:normal"><strong>${escapeHtml(student.name)}</strong><br/>${escapeHtml(student.grade)} / ${escapeHtml(student.className)}</th><td style="${cell}">Initial sessions: ${student.initial}<br/>Initial session days: ${student.referralDays}<br/>Follow-ups: ${student.followUps}</td><td style="${cell}">Present: ${student.present}<br/>Absent: ${student.absent}<br/>Pending: ${student.pending}<br/>Awaiting follow-up: ${student.missedAwaitingFollowUp}</td></tr>`).join("")}</tbody></table>` : "<p>No student sessions recorded this week.</p>";
   const teacherTable = tables.teachers.length ? `<table aria-label="Teacher assignment overview" style="width:100%;border-collapse:collapse;table-layout:fixed"><thead><tr><th scope="col" style="${heading}">Teacher</th><th scope="col" style="${heading}">Assignments</th><th scope="col" style="${heading}">Session outcomes</th></tr></thead><tbody>${tables.teachers.map(teacher => `<tr><th scope="row" style="${cell};text-align:left;font-weight:normal"><strong>${escapeHtml(teacher.name)}</strong></th><td style="${cell}">Initial sessions: ${teacher.initial}<br/>Students: ${teacher.students}<br/>Follow-ups: ${teacher.followUps}</td><td style="${cell}">Present: ${teacher.present}<br/>Absent: ${teacher.absent}<br/>Pending: ${teacher.pending}</td></tr>`).join("")}</tbody></table>` : "<p>No teacher assignment activity recorded this week.</p>";
-  const bodyStart = lines.indexOf("Student records for review (all students with sessions this week)");
+  const bodyStart = lines.indexOf(reasonsTitle);
   const summary = lines.slice(0, bodyStart).join("\n");
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(subject)}</title></head><body style="margin:0;background:#f8f9f4;color:#263b2c;font:16px/1.7 Arial,sans-serif"><main style="max-width:760px;margin:24px auto;padding:24px;background:#fff;border:1px solid #e2e7dc;border-top:4px solid #0e5403;border-radius:10px"><h1 style="font-size:26px;color:#173c2a">Reflection Room</h1><pre style="font:inherit;white-space:pre-wrap;overflow-wrap:anywhere">${escapeHtml(summary)}</pre><h2 style="font-size:20px">Student records for review</h2><p>Complete weekly list: ${counted(tables.studentCount, "student")} with sessions this week, ordered by initial session days, recorded absences and initial sessions.</p>${studentTable}<h2 style="font-size:20px">Teacher assignment overview</h2>${teacherTable}<p>Review the complete records in the <a style="color:#0e5403" href="${escapeHtml(dashboardUrl)}">secure insights dashboard</a>.</p><p>Kind regards,<br/>Reflection Room | London Academy</p><p style="font-size:13px;color:#617054">${escapeHtml(lines[lines.length - 2])}<br/>${escapeHtml(lines[lines.length - 1])}</p></main></body></html>`;
-  return { weekKey: period.start, period, metrics, patterns, tables, dashboardUrl, subject, text, html };
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(subject)}</title></head><body style="margin:0;background:#f8f9f4;color:#263b2c;font:16px/1.7 Arial,sans-serif"><main style="max-width:760px;margin:24px auto;padding:24px;background:#fff;border:1px solid #e2e7dc;border-top:4px solid #0e5403;border-radius:10px"><h1 style="font-size:26px;color:#173c2a">Reflection Room</h1><pre style="font:inherit;white-space:pre-wrap;overflow-wrap:anywhere">${escapeHtml(summary)}</pre>${reasonSection}<h2 style="font-size:20px">Student records for review</h2><p>Complete weekly list: ${counted(tables.studentCount, "student")} with sessions this week, ordered by initial session days, recorded absences and initial sessions.</p>${studentTable}<h2 style="font-size:20px">Teacher assignment overview</h2>${teacherTable}<p>Review the complete records in the <a style="color:#0e5403" href="${escapeHtml(dashboardUrl)}">secure insights dashboard</a>.</p><p>Kind regards,<br/>Reflection Room | London Academy</p><p style="font-size:13px;color:#617054">${escapeHtml(lines[lines.length - 2])}<br/>${escapeHtml(lines[lines.length - 1])}</p></main></body></html>`;
+  return { weekKey: period.start, period, metrics, behaviourReasons, patterns, tables, dashboardUrl, subject, text, html };
 }

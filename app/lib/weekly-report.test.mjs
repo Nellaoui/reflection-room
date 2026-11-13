@@ -92,11 +92,23 @@ test("behaviour insights distinguish referral days, separate follow-ups and do n
 test("empty weeks remain factual and contain no invented intervention or comparisons as percentages", () => {
   const report = pure.buildWeeklyReport([], { now: friday, appUrl: "http://127.0.0.1:5173" });
   assert.equal(report.metrics.total, 0);
+  assert.deepEqual(report.behaviourReasons, []);
   assert.equal(report.metrics.largestTeacherShare, null);
   assert.match(report.text, /No reflection sessions are recorded for this reporting week/);
   assert.equal(report.patterns.suggestedActions.length, 0);
   assert.equal(report.patterns.previousWeek.initialChange, 0);
   assert.throws(() => pure.buildWeeklyReport([], { now: friday, appUrl: "javascript:alert(1)" }));
+});
+
+test("the same assignment contributes to the weekly behaviour reason count only once", () => {
+  const assignment = row("repeated-id", "student-a", "2026-11-02", "pending", {
+    reasonCategory: "Not following instructions",
+  });
+  const report = pure.buildWeeklyReport([assignment, { ...assignment }], {
+    now: friday, appUrl: safeEnv.WEEKLY_REPORT_APP_URL,
+  });
+  assert.equal(report.metrics.initial, 1);
+  assert.deepEqual(report.behaviourReasons, [{ reason: "Not following instructions", count: 1 }]);
 });
 
 test("named student tables include every weekly student, rank separate referral days first and escape HTML names", () => {
@@ -214,6 +226,51 @@ test("report query attributes staff by identity, includes prior week comparisons
     assert.match(report.text, /Same staff name/);
     assert.equal(report.tables.teachers.length, 2);
     assert.doesNotMatch(JSON.stringify(report), /Private reason|provider-1|staff-1@/);
+  } finally { h.close(); }
+});
+
+test("weekly report counts original behaviour reasons in order and keeps free-text details private", async () => {
+  const h = await harness();
+  try {
+    h.student();
+    h.student("pupil-b", "7B");
+    h.assignment("instructions-a", { reason: "Not following instructions" });
+    h.assignment("instructions-b", { studentId: "pupil-b", reason: "Not following instructions" });
+    h.assignment("disruption", { date: "2026-11-03", reason: "Disruption in class" });
+    h.assignment("other", { date: "2026-11-04", reason: "Other: Fixture private other detail" });
+    h.assignment("legacy", { date: "2026-11-05", reason: "Fixture private legacy detail" });
+    h.assignment("missing", { studentId: "pupil-b", date: "2026-11-04", reason: "   " });
+    h.assignment("follow-up", {
+      date: "2026-11-05", slot: "lunch", reason: "Not following instructions",
+      status: "present", rescheduledFromId: "instructions-a",
+    });
+    h.assignment("cancelled", { date: "2026-11-06", reason: "Misuse of devices" });
+    h.sqlite.prepare("UPDATE reflection_assignments SET cancelled_at = ? WHERE id = ?").run("2026-11-05T09:00:00Z", "cancelled");
+    h.assignment("previous", { date: "2026-10-26", reason: "Disrespectful behaviour" });
+
+    const report = await h.service.loadWeeklyReport(h.db, friday, safeEnv.WEEKLY_REPORT_APP_URL);
+    const reasons = [
+      { reason: "Not following instructions", count: 2 },
+      { reason: "Disruption in class", count: 1 },
+      { reason: "Other", count: 1 },
+      { reason: "Previous reasons", count: 1 },
+    ];
+    assert.deepEqual(report.behaviourReasons, reasons);
+    assert.equal(report.metrics.initial, 6);
+    assert.equal(report.metrics.followUps, 1);
+    assert.equal(report.metrics.initialSessionsWithoutReason, 1);
+    assert.match(report.text, /Behaviour reasons/);
+    assert.deepEqual(
+      report.text.split("\n").filter(line => reasons.some(({ reason }) => line.startsWith(`${reason} | `))),
+      reasons.map(({ reason, count }) => `${reason} | ${count}`),
+    );
+
+    const table = report.html.match(/<table[^>]*aria-label="Behaviour reasons"[^>]*>[\s\S]*?<\/table>/)?.[0];
+    assert.ok(table);
+    const rowTexts = [...table.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)].slice(1).map(([, content]) =>
+      [...content.matchAll(/<(?:th|td)\b[^>]*>([\s\S]*?)<\/(?:th|td)>/g)].map(([, value]) => value.replace(/<[^>]+>/g, "").trim()));
+    assert.deepEqual(rowTexts, reasons.map(({ reason, count }) => [reason, String(count)]));
+    assert.doesNotMatch(JSON.stringify(report), /Fixture private other detail|Fixture private legacy detail|Misuse of devices|Disrespectful behaviour/);
   } finally { h.close(); }
 });
 
