@@ -15,6 +15,7 @@ import { AttendanceLegend } from "./InsightLegend";
 import StudentProfile, { followUpIds } from "./StudentProfile";
 import SchoolDatePicker from "./SchoolDatePicker";
 import { nextReflectionDay, nextSchoolDay, reflectionDayClosure, schoolDayClosure } from "@/app/lib/school-calendar";
+import { reflectionReasonOptions } from "@/app/lib/reflection-reasons";
 import { casablancaClock } from "@/app/lib/weekly-report";
 import behaviourStyles from "./reflection-behaviour-steps.module.css";
 
@@ -43,11 +44,11 @@ type ModalType = "reflection" | "student" | "edit-student" | "import" | "help" |
 type ImportStudent = { name: string; grade: string; className: string; toddleId?: string };
 const slotLabels: Record<Slot, string> = { morning: "Morning break", lunch: "Lunch break" };
 const reflectionLocation = "Music Room, canteen floor";
-const unconfirmedBehaviourSteps = { chance: false, choice: false, consequence: false, none: false };
+const unconfirmedBehaviourSteps = { choice: false, chance: false, consequence: false, none: false };
 const behaviourStepLabels = [
-  { step: "chance", label: "Chance" },
-  { step: "choice", label: "Choice" },
-  { step: "consequence", label: "Consequence" },
+  { step: "choice", label: "1. Choice" },
+  { step: "chance", label: "2. Chance" },
+  { step: "consequence", label: "3. Consequence" },
 ] as const;
 const adminViews: View[] = ["insights", "teacher-insights", "users", "activity", "weekly-report"];
 const collator = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
@@ -70,8 +71,8 @@ function compareGrades(a: string, b: string): number {
 
 function todayISO() { return casablancaClock(new Date()).date; }
 function defaultReflectionDate() { return nextReflectionDay(todayISO(), true) || ""; }
-function normalizedReason(value: string) { return value.normalize("NFKC").replace(/\s+/g, " ").trim(); }
-function hasReason(value: string) { return !!normalizedReason(value).replace(/[\p{White_Space}\p{Cf}]/gu, ""); }
+function normalizedText(value: string) { return value.normalize("NFKC").replace(/\s+/g, " ").trim(); }
+function hasText(value: string) { return !!normalizedText(value).replace(/[\p{White_Space}\p{Cf}]/gu, ""); }
 function formatDate(date: string, options?: Intl.DateTimeFormatOptions) { return new Date(`${date}T12:00:00`).toLocaleDateString("en-GB", options || { weekday: "long", day: "numeric", month: "long", year: "numeric" }); }
 class WorkspaceLoadError extends Error { constructor(message: string, readonly status: number) { super(message); this.name = "WorkspaceLoadError"; } }
 async function loadWorkspace(signal?: AbortSignal): Promise<AppData> { const response = await fetch("/api/data", { cache: "no-store", signal }); const json = await response.json() as AppData & { error?: string }; if (!response.ok) throw new WorkspaceLoadError(json.error || "Could not load the school workspace.", response.status); return { ...json, students: json.students || [], assignments: json.assignments || [] }; }
@@ -107,16 +108,24 @@ export default function ReflectionWorkspace({ portal = "default" }: { portal?: "
   const [requestedView, setView] = useState<View>("sessions"); const [date, setDate] = useState(todayISO); const [historySlot, setHistorySlot] = useState<"all" | Slot>("all");
   const [query, setQuery] = useState(""); const [grade, setGrade] = useState(""); const [classFilter, setClassFilter] = useState(""); const [statusFilter, setStatusFilter] = useState(""); const [historyDate, setHistoryDate] = useState("");
   const [modal, setModal] = useState<ModalType>(null); const [mobileNav, setMobileNav] = useState(false); const [toast, setToast] = useState(""); const [saving, setSaving] = useState(false); const [formError, setFormError] = useState(""); const [updating, setUpdating] = useState<string[]>([]); const [deleteId, setDeleteId] = useState<string | null>(null);
-  const [selectedStudents, setSelectedStudents] = useState<string[]>([]); const [studentQuery, setStudentQuery] = useState(""); const [studentGrade, setStudentGrade] = useState(""); const [studentClass, setStudentClass] = useState(""); const [reflectionDate, setReflectionDate] = useState(defaultReflectionDate); const [reason, setReason] = useState("");
-  const [reasonTouched, setReasonTouched] = useState(false);
+  const [selectedStudents, setSelectedStudents] = useState<string[]>([]); const [studentQuery, setStudentQuery] = useState(""); const [studentGrade, setStudentGrade] = useState(""); const [studentClass, setStudentClass] = useState(""); const [reflectionDate, setReflectionDate] = useState(defaultReflectionDate);
+  const [reasonCategory, setReasonCategory] = useState("");
+  const [reasonDetails, setReasonDetails] = useState("");
+  const [reasonDetailsTouched, setReasonDetailsTouched] = useState(false);
   const [behaviourSteps, setBehaviourSteps] = useState(unconfirmedBehaviourSteps);
-  const hasBehaviourSelection = behaviourSteps.chance || behaviourSteps.choice || behaviourSteps.consequence || behaviourSteps.none;
+  const [behaviourExplanation, setBehaviourExplanation] = useState("");
+  const [behaviourExplanationTouched, setBehaviourExplanationTouched] = useState(false);
+  const hasRequiredReason = !!reasonCategory && (reasonCategory !== "other" || hasText(reasonDetails));
+  const stepsConfirmed = behaviourStepLabels.every(({ step }) => behaviourSteps[step]);
+  const hasRequiredBehaviourSteps = behaviourSteps.none ? hasText(behaviourExplanation) : stepsConfirmed;
+  const otherReasonError = reasonDetailsTouched && !hasText(reasonDetails);
+  const behaviourExplanationError = behaviourExplanationTouched && !hasText(behaviourExplanation);
   const [dateChoice, setDateChoice] = useState<"today" | "custom">(() => reflectionDayClosure(todayISO()) ? "custom" : "today"); const [bookingRefreshing, setBookingRefreshing] = useState(false); const [bookingLoadError, setBookingLoadError] = useState("");
   const [profileStudentId, setProfileStudentId] = useState<string | null>(null);
   const [newName, setNewName] = useState(""); const [newGrade, setNewGrade] = useState(""); const [newClass, setNewClass] = useState(""); const [csvText, setCsvText] = useState(""); const [importPreview, setImportPreview] = useState<ImportStudent[]>([]); const [fileName, setFileName] = useState("");
   const [showArchived, setShowArchived] = useState(false); const [editingStudent, setEditingStudent] = useState<Student | null>(null); const [studentBusyIds, setStudentBusyIds] = useState<string[]>([]);
   const [pagination, setPagination] = useState({ key: "", page: 1 });
-  function handleWorkspaceError(error: unknown) { const message = error instanceof Error ? error.message : "Could not load the school workspace."; setLoadError(message); if (error instanceof WorkspaceLoadError && (error.status === 401 || error.status === 403)) { setAccessError({ status: error.status, message }); setData({ students: [], assignments: [] }); setView("sessions"); setModal(null); setDeleteId(null); setSelectedStudents([]); setEditingStudent(null); setCsvText(""); setImportPreview([]); setQuery(""); setStudentQuery(""); setReason(""); setNewName(""); setProfileStudentId(null); } }
+  function handleWorkspaceError(error: unknown) { const message = error instanceof Error ? error.message : "Could not load the school workspace."; setLoadError(message); if (error instanceof WorkspaceLoadError && (error.status === 401 || error.status === 403)) { setAccessError({ status: error.status, message }); setData({ students: [], assignments: [] }); setView("sessions"); setModal(null); setDeleteId(null); setSelectedStudents([]); setEditingStudent(null); setCsvText(""); setImportPreview([]); setQuery(""); setStudentQuery(""); resetReflectionDetails(); setNewName(""); setProfileStudentId(null); } }
   function receiveWorkspace(result: AppData) { setData(result); setLoadError(""); setAccessError(null); }
   async function refresh(initial = false) { if (initial) setLoading(true); setLoadError(""); try { receiveWorkspace(await loadWorkspace()); } catch (error) { handleWorkspaceError(error); } finally { setLoading(false); } }
   useEffect(() => { const controller = new AbortController(); void loadWorkspace(controller.signal).then(result => { if (!controller.signal.aborted) receiveWorkspace(result); }).catch(error => { if (!controller.signal.aborted) handleWorkspaceError(error); }).finally(() => { if (!controller.signal.aborted) setLoading(false); }); return () => controller.abort(); }, []);
@@ -194,7 +203,16 @@ export default function ReflectionWorkspace({ portal = "default" }: { portal?: "
   const pageSize = 12; const pageCount = Math.max(1, Math.ceil(filteredAssignments.length / pageSize)); const filterKey = JSON.stringify([query, grade, classFilter, historySlot, date, statusFilter, historyDate, view]); const page = Math.min(pageCount, pagination.key === filterKey ? pagination.page : 1);
   function changePage(next: number) { setPagination({ key: filterKey, page: Math.max(1, Math.min(pageCount, next)) }); }
   function changeView(next: View) { if (!isAdmin && adminViews.includes(next)) return; setView(next); setQuery(""); setGrade(""); setClassFilter(""); setStatusFilter(""); setHistorySlot("all"); setHistoryDate(""); setMobileNav(false); }
-  function openModal(next: ModalType, student?: Student) { if ((next === "student" || next === "edit-student" || next === "import") && !isAdmin) return; setFormError(""); if (next === "reflection") { setSelectedStudents(student ? [student.id] : []); setStudentQuery(""); setStudentGrade(""); setStudentClass(""); setReflectionDate(defaultReflectionDate()); setDateChoice(todayClosure ? "custom" : "today"); void refreshBookings(); setReason(""); setReasonTouched(false); setBehaviourSteps(unconfirmedBehaviourSteps); } if (next === "student" || next === "edit-student") { setEditingStudent(next === "edit-student" ? student || null : null); setNewName(student?.name || ""); setNewGrade(student?.grade || ""); setNewClass(student?.className || ""); } if (next === "import") { setCsvText(""); setImportPreview([]); setFileName(""); } setModal(next); }
+  function resetReflectionDetails() {
+    setReasonCategory("");
+    setReasonDetails("");
+    setReasonDetailsTouched(false);
+    setBehaviourSteps(unconfirmedBehaviourSteps);
+    setBehaviourExplanation("");
+    setBehaviourExplanationTouched(false);
+  }
+
+  function openModal(next: ModalType, student?: Student) { if ((next === "student" || next === "edit-student" || next === "import") && !isAdmin) return; setFormError(""); if (next === "reflection") { setSelectedStudents(student ? [student.id] : []); setStudentQuery(""); setStudentGrade(""); setStudentClass(""); setReflectionDate(defaultReflectionDate()); setDateChoice(todayClosure ? "custom" : "today"); void refreshBookings(); resetReflectionDetails(); } if (next === "student" || next === "edit-student") { setEditingStudent(next === "edit-student" ? student || null : null); setNewName(student?.name || ""); setNewGrade(student?.grade || ""); setNewClass(student?.className || ""); } if (next === "import") { setCsvText(""); setImportPreview([]); setFileName(""); } setModal(next); }
   async function refreshBookings() { setBookingRefreshing(true); setBookingLoadError(""); try { receiveWorkspace(await loadWorkspace()); } catch (error) { if (error instanceof WorkspaceLoadError && (error.status === 401 || error.status === 403)) handleWorkspaceError(error); else setBookingLoadError(error instanceof Error ? error.message : "Could not check the latest bookings."); } finally { setBookingRefreshing(false); } }
   function closeModal() { if (!saving) { setModal(null); setFormError(""); } }
   async function api(path: string, method: string, body?: unknown) {
@@ -222,9 +240,16 @@ export default function ReflectionWorkspace({ portal = "default" }: { portal?: "
   }
   async function saveReflection(event: FormEvent) {
     event.preventDefault();
-    setReasonTouched(true);
-    if (!hasReason(reason)) { setFormError("Enter a reason for this reflection."); return; }
-    if (!hasBehaviourSelection) { setFormError("Select a behaviour step or choose None of the above."); return; }
+    if (!hasRequiredReason) {
+      setReasonDetailsTouched(true);
+      setFormError(reasonCategory === "other" ? "Describe the behaviour for Other." : "Choose a reason for this reflection.");
+      return;
+    }
+    if (!hasRequiredBehaviourSteps) {
+      setBehaviourExplanationTouched(true);
+      setFormError(behaviourSteps.none ? "Explain why the behaviour steps were not used." : "Select all three behaviour steps or choose None of the above.");
+      return;
+    }
     if (reflectionClosure) { setFormError(reflectionClosure); return; }
     if (!selectedStudents.length || hasBookingConflict || bookingRefreshing || bookingLoadError) {
       setFormError("Choose a date when every selected student is available at lunch.");
@@ -249,8 +274,12 @@ export default function ReflectionWorkspace({ portal = "default" }: { portal?: "
         studentIds: selectedStudents,
         date: reflectionDate,
         slots: ["lunch"],
-        reason: normalizedReason(reason),
-        behaviourSteps,
+        reasonCategory,
+        ...(reasonCategory === "other" ? { reasonDetails: normalizedText(reasonDetails) } : {}),
+        behaviourSteps: {
+          ...behaviourSteps,
+          ...(behaviourSteps.none ? { explanation: normalizedText(behaviourExplanation) } : {}),
+        },
       });
       await refresh();
       if (result.skipped) {
@@ -439,13 +468,16 @@ export default function ReflectionWorkspace({ portal = "default" }: { portal?: "
     {modal === "reflection" && <Modal title="Send to reflection" subtitle={`Lunch break · ${reflectionLocation}`} onClose={closeModal} wide><form onSubmit={saveReflection}><div className="modal-body">
         <fieldset className={behaviourStyles.section} disabled={saving} aria-describedby="behaviour-steps-hint">
           <legend className="form-label">Behaviour steps <span className="required-label">Required</span></legend>
-          <p id="behaviour-steps-hint" className={behaviourStyles.hint}>Select the steps you used, or choose None of the above.</p>
+          <p id="behaviour-steps-hint" className={behaviourStyles.hint}>Confirm all three steps or choose None of the above and explain why.</p>
           <div className={behaviourStyles.options}>
             {behaviourStepLabels.map(({ step, label }) => (
               <label className={behaviourStyles.option} key={step}>
                 <input type="checkbox" checked={behaviourSteps[step]} onChange={event => {
                   const checked = event.currentTarget.checked;
                   setBehaviourSteps(previous => ({ ...previous, [step]: checked, none: false }));
+                  setBehaviourExplanation("");
+                  setBehaviourExplanationTouched(false);
+                  setFormError("");
                 }}/>
                 <span>{label}</span>
               </label>
@@ -454,12 +486,32 @@ export default function ReflectionWorkspace({ portal = "default" }: { portal?: "
               type="button"
               className={behaviourStyles.option}
               aria-pressed={behaviourSteps.none}
-              onClick={() => setBehaviourSteps(previous => ({ ...unconfirmedBehaviourSteps, none: !previous.none }))}
+              onClick={() => {
+                setBehaviourSteps(previous => ({ ...unconfirmedBehaviourSteps, none: !previous.none }));
+                setBehaviourExplanation("");
+                setBehaviourExplanationTouched(false);
+                setFormError("");
+              }}
             >
               <span className={behaviourStyles.noneIndicator} aria-hidden="true">{behaviourSteps.none && <Check size={17}/>}</span>
               <span>None of the above</span>
             </button>
           </div>
+          {behaviourSteps.none && <div className="form-field">
+            <label className="form-label" htmlFor="behaviour-explanation">Why were the steps not used? <span className="required-label">Required</span></label>
+            <textarea
+              id="behaviour-explanation"
+              required
+              maxLength={1000}
+              rows={3}
+              value={behaviourExplanation}
+              aria-invalid={behaviourExplanationError || undefined}
+              aria-describedby={behaviourExplanationError ? "behaviour-explanation-error" : undefined}
+              onBlur={() => setBehaviourExplanationTouched(true)}
+              onChange={event => { setBehaviourExplanation(event.currentTarget.value); setFormError(""); }}
+            />
+            {behaviourExplanationError && <p id="behaviour-explanation-error" className="form-error" role="alert">Enter an explanation.</p>}
+          </div>}
         </fieldset>
         <label className="form-label">Students <span>Required</span></label><div className="student-picker"><div className="search-field"><Search size={17}/><input placeholder="Search by student name…" aria-label="Search students to assign" value={studentQuery} onChange={e => setStudentQuery(e.target.value)}/></div><div className="picker-filters"><select aria-label="Choose grade" value={studentGrade} onChange={e => { setStudentGrade(e.target.value); setStudentClass(""); }}><option value="">All grades</option>{grades.map(g => <option key={g}>{g}</option>)}</select><select aria-label="Choose class" value={studentClass} onChange={e => setStudentClass(e.target.value)}><option value="">All classes</option>{[...new Set(activeStudents.filter(s => !studentGrade || s.grade === studentGrade).map(s => s.className))].sort(collator.compare).map(c => <option key={c}>{c}</option>)}</select></div><div className="picker-list">{!activeStudents.length ? <div className="picker-empty"><Users size={22}/><strong>Your directory is empty</strong><p>{isAdmin ? "Import your school roster or add a student first." : "Ask your school admin to add the student roster."}</p>{isAdmin && <button className="text-button" type="button" onClick={() => openModal("import")}><Upload size={14}/>Import student list</button>}</div> : !pickerStudents.length ? <p className="picker-empty">No students match your search.</p> : pickerStudents.map(s => <label className={`picker-student ${selectedStudents.includes(s.id) ? "is-selected" : ""}`} key={s.id}><input type="checkbox" checked={selectedStudents.includes(s.id)} onChange={e => setSelectedStudents(ids => e.target.checked ? [...ids, s.id] : ids.filter(id => id !== s.id))}/><div className="student-avatar">{initials(s.name)}</div><strong>{studentLabel(s)}</strong><span>{s.grade} <i/> {s.className}</span></label>)}</div><div className="picker-footer"><span>{selectedStudents.length} student{selectedStudents.length === 1 ? "" : "s"} selected</span>{selectedStudents.length > 0 && <button className="text-button" type="button" onClick={() => setSelectedStudents([])}>Clear selection</button>}</div></div><div className="form-field"><label className="form-label">Reflection date <span>Required</span></label><div className="date-choice-tabs" role="radiogroup" aria-label="Reflection date"><button type="button" role="radio" aria-checked={dateChoice === "today"} disabled={!!todayClosure} title={todayClosure || undefined} className={dateChoice === "today" ? "selected" : ""} onClick={() => { setDateChoice("today"); setReflectionDate(todayISO()); }}><CalendarDays size={14}/>Today <span>{formatDate(todayISO(), { day: "numeric", month: "short" })}</span></button><button type="button" role="radio" aria-checked={dateChoice === "custom"} className={dateChoice === "custom" ? "selected" : ""} onClick={() => setDateChoice("custom")}><CalendarClock size={14}/>Custom date</button></div>{todayClosure && <p className="today-unavailable-note">{todayClosure} Choose an available school day below.</p>}{dateChoice === "custom" && <SchoolDatePicker id="reflection-date" label="Custom reflection date" value={reflectionDate} disabled={saving} onChange={setReflectionDate}/> }</div>{bookingRefreshing && <p className="booking-check"><LoaderCircle size={13} className="spin"/>Checking the latest session bookings…</p>}{bookingLoadError && <div className="booking-warning" role="alert"><p>{bookingLoadError}</p><button className="text-button" type="button" onClick={refreshBookings}><RotateCcw size={12}/>Check bookings again</button></div>}{hasBookingConflict && (
           <div className="booking-warning" aria-live="polite">
@@ -467,11 +519,41 @@ export default function ReflectionWorkspace({ portal = "default" }: { portal?: "
             <p>{[...new Set(bookedForSelection.map(assignment => studentLabel(studentMap.get(assignment.studentId))))].join(", ")}</p>
             <p>Choose another school day or adjust the student selection.</p>
           </div>
-        )}<div className="form-field"><label className="form-label" htmlFor="reflection-reason">Reason <span className="required-label">Required</span></label><textarea id="reflection-reason" required maxLength={1000} rows={3} placeholder="Why is this reflection being assigned?" value={reason} aria-invalid={reasonTouched && !hasReason(reason) ? true : undefined} aria-describedby={reasonTouched && !hasReason(reason) ? "reflection-reason-error" : undefined} onBlur={() => setReasonTouched(true)} onChange={e => setReason(e.target.value)}/>{reasonTouched && !hasReason(reason) && <p id="reflection-reason-error" className="form-error" role="alert">Enter a reason for this reflection.</p>}</div><div className="form-field"><label className="form-label" htmlFor="assigned-by">Assigned by <span>Automatic</span></label><input id="assigned-by" readOnly value={data.user?.name || "School staff"}/></div>{formError && <p className="form-error" role="alert">{formError}</p>}</div><div className="modal-footer"><span><ShieldCheck size={14}/>Saved to the school register</span><div><button className="button secondary" type="button" disabled={saving} onClick={closeModal}>Cancel</button><button className="button primary" type="submit" disabled={saving || bookingRefreshing || !!bookingLoadError || !selectedStudents.length || hasBookingConflict || !hasReason(reason) || !hasBehaviourSelection || !!reflectionClosure}>{saving ? <LoaderCircle size={16} className="spin"/> : <Plus size={17}/>} {saving ? "Adding…" : "Send to reflection"}</button></div></div></form></Modal>}
+        )}
+        <div className="form-field">
+          <label className="form-label" htmlFor="reflection-reason">Reason <span className="required-label">Required</span></label>
+          <select id="reflection-reason" required disabled={saving} value={reasonCategory} onChange={event => {
+            setReasonCategory(event.currentTarget.value);
+            setReasonDetails("");
+            setReasonDetailsTouched(false);
+            setFormError("");
+          }}>
+            <option value="" disabled>Choose a reason</option>
+            {reflectionReasonOptions.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
+          </select>
+        </div>
+        {reasonCategory === "other" && <div className="form-field">
+          <label className="form-label" htmlFor="reflection-reason-details">Other reason <span className="required-label">Required</span></label>
+          <textarea
+            id="reflection-reason-details"
+            required
+            disabled={saving}
+            maxLength={993}
+            rows={3}
+            value={reasonDetails}
+            aria-invalid={otherReasonError || undefined}
+            aria-describedby={otherReasonError ? "reflection-reason-details-hint reflection-reason-details-error" : "reflection-reason-details-hint"}
+            onBlur={() => setReasonDetailsTouched(true)}
+            onChange={event => { setReasonDetails(event.currentTarget.value); setFormError(""); }}
+          />
+          <p id="reflection-reason-details-hint" className="form-hint">Describe the behaviour only.</p>
+          {otherReasonError && <p id="reflection-reason-details-error" className="form-error" role="alert">Enter a reason for Other.</p>}
+        </div>}
+        <div className="form-field"><label className="form-label" htmlFor="assigned-by">Assigned by <span>Automatic</span></label><input id="assigned-by" readOnly value={data.user?.name || "School staff"}/></div>{formError && <p className="form-error" role="alert">{formError}</p>}</div><div className="modal-footer"><span><ShieldCheck size={14}/>Saved to the school register</span><div><button className="button secondary" type="button" disabled={saving} onClick={closeModal}>Cancel</button><button className="button primary" type="submit" disabled={saving || bookingRefreshing || !!bookingLoadError || !selectedStudents.length || hasBookingConflict || !hasRequiredReason || !hasRequiredBehaviourSteps || !!reflectionClosure}>{saving ? <LoaderCircle size={16} className="spin"/> : <Plus size={17}/>} {saving ? "Adding…" : "Send to reflection"}</button></div></div></form></Modal>}
     {profileStudent && !accessError && <StudentProfile student={{ ...profileStudent, name: studentLabel(profileStudent) }} assignments={data.assignments} mode={isAdmin ? "full" : "history"} onClose={() => setProfileStudentId(null)}/>}
     {isAdmin && (modal === "student" || modal === "edit-student") && <Modal title={editingStudent ? "Edit student details" : "Add a student"} subtitle={editingStudent ? "Keep your school directory up to date." : "Add a student to your school directory."} onClose={closeModal}><form onSubmit={saveStudentForm}><div className="modal-body"><div className="form-field"><label className="form-label" htmlFor="new-student-name">Full name</label><input id="new-student-name" required maxLength={120} placeholder="Student’s full name" value={newName} onChange={e => setNewName(e.target.value)}/></div><div className="form-row"><div className="form-field"><label className="form-label" htmlFor="new-student-grade">Grade / Year</label><input id="new-student-grade" required maxLength={40} list="grade-options" placeholder="e.g. Year 7" value={newGrade} onChange={e => setNewGrade(e.target.value)}/><datalist id="grade-options">{grades.map(g => <option key={g} value={g}/>)}</datalist></div><div className="form-field"><label className="form-label" htmlFor="new-student-class">Class</label><input id="new-student-class" required maxLength={60} placeholder="e.g. 7A" value={newClass} onChange={e => setNewClass(e.target.value)}/></div></div><p className="form-hint"><Users size={16}/>The student will be available to all teachers using this workspace.</p>{formError && <p className="form-error" role="alert">{formError}</p>}</div><div className="modal-footer"><div/><div><button className="button secondary" type="button" disabled={saving} onClick={closeModal}>Cancel</button><button className="button primary" type="submit" disabled={saving || !newName.trim() || !newGrade.trim() || !newClass.trim()}>{saving ? <LoaderCircle className="spin" size={16}/> : editingStudent ? <Check size={16}/> : <Plus size={16}/>} {editingStudent ? "Save changes" : "Add student"}</button></div></div></form></Modal>}
     {isAdmin && modal === "import" && <Modal title="Import student directory" subtitle="Bring your school roster into one shared directory." onClose={closeModal} wide><div className="modal-body"><div className="import-instructions"><FileText size={21}/><div><strong>A simple CSV file is all you need</strong><p>Include the columns <b>Name</b>, <b>Grade</b> and <b>Class</b>. Existing students are matched by their name, grade and class.</p><button className="text-button" onClick={() => downloadCsv("student-directory-template.csv", [["Name", "Grade", "Class"]])}><ArrowDownToLine size={14}/>Download CSV template</button></div></div><label className="file-drop"><Upload size={24}/><strong>{fileName || "Choose a CSV file"}</strong><span>or paste your CSV below · .csv, .tsv or .txt</span><input type="file" accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values,text/plain" aria-label="Choose student CSV file" onChange={async e => { const file = e.target.files?.[0]; if (!file) return; if (file.size > 5 * 1024 * 1024) { setFormError("Please choose a file smaller than 5 MB."); return; } try { const text = await file.text(); setCsvText(text); setFileName(file.name); setImportPreview([]); setFormError(""); } catch { setFormError("This file could not be read. Please try another CSV."); } }}/></label><div className="form-field"><label className="form-label" htmlFor="csv-data">CSV data</label><textarea id="csv-data" className="csv-textarea" rows={4} value={csvText} placeholder={'Name,Grade,Class\n'} onChange={e => { setCsvText(e.target.value); setImportPreview([]); }}/></div>{formError && <p className="form-error" role="alert">{formError}</p>}{importPreview.length > 0 && <div className="import-preview"><div><Check size={16}/><strong>{importPreview.length} students ready to import</strong></div><table><thead><tr><th>Name</th><th>Grade</th><th>Class</th></tr></thead><tbody>{importPreview.slice(0, 5).map((s, i) => <tr key={i}><td>{s.name}</td><td>{s.grade}</td><td>{s.className}</td></tr>)}</tbody></table>{importPreview.length > 5 && <p>…and {importPreview.length - 5} more students</p>}</div>}</div><div className="modal-footer"><span><ShieldCheck size={14}/>Review before importing</span><div><button className="button secondary" disabled={saving} onClick={closeModal}>Cancel</button>{importPreview.length ? <button className="button primary" disabled={saving} onClick={() => saveStudents(importPreview, importPreview.some(student => student.toddleId) ? "Toddle roster import" : "CSV import")}>{saving ? <LoaderCircle className="spin" size={16}/> : <Upload size={16}/>}Import {importPreview.length} students</button> : <button className="button primary" disabled={!csvText.trim()} onClick={previewImport}>Preview import <ArrowRight size={16}/></button>}</div></div></Modal>}
-    {modal === "help" && <Modal title="A shared space for reflection" subtitle="A simple guide for your school team." onClose={closeModal}><div className="modal-body guidance"><div><span>01</span><div><h3>Find the right student</h3><p>Browse the directory by grade and class. Admins manage students and staff access; teachers assign reflections and take attendance. This workspace is for staff only.</p></div></div><div><span>02</span><div><h3>Book a lunch reflection</h3><p>Choose a school day and enter the reason. Reflections take place in the Music Room on the canteen floor during lunch. Each student can attend one reflection per day.</p></div></div><div><span>03</span><div><h3>Record who attended</h3><p>The covering teacher marks each expected student Present or Absent. The register records the staff member and time. Pending means attendance has not been recorded.</p></div></div><div><span>04</span><div><h3>Follow up a missed session</h3><p>Marking a student Absent books two lunches on separate available school days, Monday through Thursday.</p></div></div><div><span>05</span><div><h3>Understand each student’s history</h3><p>Open a student’s name to review their full reflection history. Admins and moderators can also compare Student insights and Teacher insights.</p></div></div><p className="staff-access-help"><ShieldCheck size={15}/>Staff sign in with an authorised school Google Workspace account. An administrator manages staff access.</p></div><div className="modal-footer"><span>Pause. Reflect. Grow.</span><button className="button primary" onClick={closeModal}>Got it <Check size={16}/></button></div></Modal>}
+    {modal === "help" && <Modal title="A shared space for reflection" subtitle="A simple guide for your school team." onClose={closeModal}><div className="modal-body guidance"><div><span>01</span><div><h3>Find the right student</h3><p>Browse the directory by grade and class. Admins manage students and staff access; teachers assign reflections and take attendance. This workspace is for staff only.</p></div></div><div><span>02</span><div><h3>Book a lunch reflection</h3><p>Choose a school day, select a reason and confirm the behaviour steps. Reflections take place in the Music Room on the canteen floor during lunch. Each student can attend one reflection per day.</p></div></div><div><span>03</span><div><h3>Record who attended</h3><p>The covering teacher marks each expected student Present or Absent. The register records the staff member and time. Pending means attendance has not been recorded.</p></div></div><div><span>04</span><div><h3>Follow up a missed session</h3><p>Marking a student Absent books two lunches on separate available school days, Monday through Thursday.</p></div></div><div><span>05</span><div><h3>Understand each student’s history</h3><p>Open a student’s name to review their full reflection history. Admins and moderators can also compare Student insights and Teacher insights.</p></div></div><p className="staff-access-help"><ShieldCheck size={15}/>Staff sign in with an authorised school Google Workspace account. An administrator manages staff access.</p></div><div className="modal-footer"><span>Pause. Reflect. Grow.</span><button className="button primary" onClick={closeModal}>Got it <Check size={16}/></button></div></Modal>}
 
     {deleteId && <Modal title="Remove this reflection?" subtitle="This session will be removed from the student’s register." onClose={() => { if (!saving) setDeleteId(null); }}><div className="modal-body"><p className="delete-note">The student will no longer be expected at this reflection session. You can assign it again later if needed.</p></div><div className="modal-footer"><div/><div><button className="button secondary" disabled={saving} onClick={() => setDeleteId(null)}>Keep reflection</button><button className="button danger" disabled={saving} onClick={removeAssignment}>{saving ? <LoaderCircle className="spin" size={16}/> : <Trash2 size={16}/>}Remove reflection</button></div></div></Modal>}
   </div>;

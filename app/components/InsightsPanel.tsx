@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { LoaderCircle, RotateCcw, ShieldCheck } from "lucide-react";
-import StudentInsights, { type Student } from "./StudentInsights";
+import StudentInsights, { type InsightsDateRange, type Student } from "./StudentInsights";
 import TeacherInsights, { type InsightAssignment, type InsightTeacher } from "./TeacherInsights";
 import StudentProfile from "./StudentProfile";
 
@@ -15,7 +15,7 @@ export default function InsightsPanel({ view, onAccessDenied, onUser }: { view: 
   const [error, setError] = useState("");
   const [denied, setDenied] = useState(false);
   const [retry, setRetry] = useState(0);
-  const [selectedStudent, setSelectedStudent] = useState<string | null>(null);
+  const [selectedStudent, setSelectedStudent] = useState<{ id: string; dateRange: InsightsDateRange | null } | null>(null);
   const callbacks = useRef({ onAccessDenied, onUser });
   useEffect(() => { callbacks.current = { onAccessDenied, onUser }; }, [onAccessDenied, onUser]);
 
@@ -50,12 +50,15 @@ export default function InsightsPanel({ view, onAccessDenied, onUser }: { view: 
     return () => { controller.abort(); window.clearInterval(timer); window.removeEventListener("focus", sync); };
   }, [retry]);
 
-  const student = data?.students.find(item => item.id === selectedStudent);
+  const student = data?.students.find(item => item.id === selectedStudent?.id);
+  function openStudent(id: string, dateRange: InsightsDateRange | null) {
+    setSelectedStudent({ id, dateRange });
+  }
   return <>
     {error && <div className="error-banner" role="alert"><div><strong>{denied ? "Insights access required" : "Insights could not be refreshed"}</strong><span>{error}</span></div><button className="button secondary small" onClick={() => setRetry(value => value + 1)}><RotateCcw size={14}/>Try again</button></div>}
     {loading ? <div className="loading-state"><LoaderCircle size={25} className="spin"/><p>Loading insights…</p></div> : data && !denied ? <>
-      {view === "students" ? <StudentInsights students={data.students} assignments={data.assignments} onOpenStudent={setSelectedStudent}/> : <TeacherInsights students={data.students} assignments={data.assignments} teachers={data.teachers}/>}
-      {view === "students" && student && <StudentProfile student={student} assignments={data.assignments} mode="insights" onClose={() => setSelectedStudent(null)}/>}
+      {view === "students" ? <StudentInsights students={data.students} assignments={data.assignments} onOpenStudent={openStudent}/> : <TeacherInsights students={data.students} assignments={data.assignments} teachers={data.teachers}/>}
+      {view === "students" && student && <StudentProfile student={student} assignments={data.assignments} mode="insights" reasonDateRange={selectedStudent?.dateRange} onClose={() => setSelectedStudent(null)}/>}
     </> : !error && <div className="loading-state"><ShieldCheck size={25}/><p>Insights are available to admins and moderators.</p></div>}
   </>;
 }

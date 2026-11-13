@@ -11,6 +11,7 @@ export type Assignment = {
   date: string;
   slot: "morning" | "lunch";
   reason?: string;
+  reasonCategory?: string;
   assignedBy?: string;
   status: "pending" | "present" | "absent";
   createdAt?: string;
@@ -41,11 +42,12 @@ function localDate(date: Date) {
 
 type Period = "all" | "7" | "30";
 type SessionCounts = { assigned: number; present: number; absent: number };
+export type InsightsDateRange = { start: string; end: string };
 
 export default function StudentInsights({ students, assignments, onOpenStudent }: {
   students: Student[];
   assignments: Assignment[];
-  onOpenStudent: (studentId: string) => void;
+  onOpenStudent: (studentId: string, dateRange: InsightsDateRange | null) => void;
 }) {
   const [query, setQuery] = useState("");
   const [grade, setGrade] = useState("");
@@ -55,16 +57,17 @@ export default function StudentInsights({ students, assignments, onOpenStudent }
   const grades = useMemo(() => [...new Set(students.map(student => student.grade))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })), [students]);
   const classes = useMemo(() => [...new Set(students.filter(student => !grade || student.grade === grade).map(student => student.className))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })), [students, grade]);
 
+  const dateRange = useMemo(() => {
+    if (period === "all") return null;
+    const start = new Date(`${today}T12:00:00`);
+    start.setDate(start.getDate() - (Number(period) - 1));
+    return { start: localDate(start), end: today };
+  }, [period, today]);
+
   const sessionCounts = useMemo(() => {
-    let startDate: string | null = null;
-    if (period !== "all") {
-      const start = new Date(`${today}T12:00:00`);
-      start.setDate(start.getDate() - (Number(period) - 1));
-      startDate = localDate(start);
-    }
     const counts = new Map<string, SessionCounts>();
     for (const assignment of assignments) {
-      if (startDate && (assignment.date < startDate || assignment.date > today)) continue;
+      if (dateRange && (assignment.date < dateRange.start || assignment.date > dateRange.end)) continue;
       const studentCounts = counts.get(assignment.studentId) ?? { assigned: 0, present: 0, absent: 0 };
       studentCounts.assigned++;
       if (assignment.status === "present") studentCounts.present++;
@@ -72,7 +75,7 @@ export default function StudentInsights({ students, assignments, onOpenStudent }
       counts.set(assignment.studentId, studentCounts);
     }
     return counts;
-  }, [assignments, period, today]);
+  }, [assignments, dateRange]);
 
   const search = query.trim().toLowerCase();
   const rows = students.flatMap(student => {
@@ -142,7 +145,7 @@ export default function StudentInsights({ students, assignments, onOpenStudent }
           </thead>
           <tbody>
             {rows.map(student => <tr key={student.id}>
-              <td><button type="button" className="student-name-link" onClick={() => onOpenStudent(student.id)}>{student.name}</button></td>
+              <td><button type="button" className="student-name-link" onClick={() => onOpenStudent(student.id, dateRange)}>{student.name}</button></td>
               <td>{student.className || "—"}</td>
               <td>{student.assigned}</td>
               <td><strong className="insights-present-count">{student.present}</strong></td>
