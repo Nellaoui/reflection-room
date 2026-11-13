@@ -1,9 +1,9 @@
 "use client";
 
-import { useMemo } from "react";
+import { useId, useMemo } from "react";
 import { CalendarDays, Check, Clock3, History, Moon, Sun, UserRound, X } from "lucide-react";
 import Modal from "./Modal";
-import { formatSessionDate, sessionMetrics, type Assignment, type Student } from "./StudentInsights";
+import { formatSessionDate, sessionMetrics, type Assignment, type InsightsDateRange, type Student } from "./StudentInsights";
 import { AttendanceLegend } from "./InsightLegend";
 import "./student-analytics.css";
 
@@ -19,12 +19,30 @@ export function followUpIds(assignment: Pick<Assignment, "rescheduledToId" | "re
   return assignment.rescheduledToIds ?? (assignment.rescheduledToId ? [assignment.rescheduledToId] : []);
 }
 
-export default function StudentProfile({ student, assignments, onClose, mode = "full" }: { student: Student; assignments: Assignment[]; onClose: () => void; mode?: "full" | "history" | "insights" }) {
+export default function StudentProfile({ student, assignments, onClose, mode = "full", reasonDateRange }: {
+  student: Student;
+  assignments: Assignment[];
+  onClose: () => void;
+  mode?: "full" | "history" | "insights";
+  reasonDateRange?: InsightsDateRange | null;
+}) {
   const history = useMemo(() => assignments.filter(item => item.studentId === student.id).sort((a, b) => b.date.localeCompare(a.date) || (a.slot === b.slot ? 0 : a.slot === "lunch" ? -1 : 1) || (b.createdAt || "").localeCompare(a.createdAt || "") || a.id.localeCompare(b.id)), [student.id, assignments]);
   const metrics = sessionMetrics(history);
   const byId = new Map(assignments.map(assignment => [assignment.id, assignment]));
   const showMetrics = mode !== "history";
   const insightsOnly = mode === "insights";
+  const reasonsHeadingId = useId();
+  const reasonCounts = new Map<string, number>();
+  if (insightsOnly) {
+    for (const assignment of history) {
+      if (assignment.rescheduledFromId) continue;
+      if (reasonDateRange && (assignment.date < reasonDateRange.start || assignment.date > reasonDateRange.end)) continue;
+      const category = assignment.reasonCategory || "Previous reasons";
+      reasonCounts.set(category, (reasonCounts.get(category) ?? 0) + 1);
+    }
+  }
+  const reasons = [...reasonCounts].sort(([firstReason, firstCount], [secondReason, secondCount]) =>
+    secondCount - firstCount || firstReason.localeCompare(secondReason));
 
   function linkedSession(id: string, direction: "from" | "to") {
     const linked = byId.get(id);
@@ -38,6 +56,20 @@ export default function StudentProfile({ student, assignments, onClose, mode = "
         <div className="student-profile-metrics" aria-label="All-time reflection totals"><div><span>Assigned sessions</span><strong>{metrics.assigned}</strong><span className="student-profile-assigned-breakdown">{metrics.initial} initial · {metrics.followUp} follow-up</span></div><div><span>Present</span><strong className="insights-present-count">{metrics.present}</strong></div><div><span>Absent</span><strong className="insights-absent-count">{metrics.absent}</strong></div><div><span>Pending</span><strong className="insights-pending-count">{metrics.pending}</strong></div></div>
         <div className="student-profile-attendance"><div><span className="student-profile-attendance-label">Attendance rate</span><strong>{metrics.rate === null ? "—" : `${metrics.rate}%`}</strong><span>{metrics.recorded ? `${metrics.present} present / ${metrics.recorded} recorded sessions` : "No attendance recorded yet"}</span></div><p>Present ÷ (present + absent). Pending sessions are excluded. Each break counts as one session.</p></div>
       </>}
+      {insightsOnly && <section className="student-profile-reasons" aria-labelledby={reasonsHeadingId}>
+        <div className="student-profile-history-heading">
+          <h3 id={reasonsHeadingId}>Reasons for reflection</h3>
+          <span>{reasonDateRange
+            ? `${formatSessionDate(reasonDateRange.start)} – ${formatSessionDate(reasonDateRange.end)}`
+            : "All time"}</span>
+        </div>
+        {reasons.length ? <dl className="student-profile-reason-counts">
+          {reasons.map(([category, count]) => <div key={category}>
+            <dt>{category}</dt>
+            <dd>{count}</dd>
+          </div>)}
+        </dl> : <p className="student-profile-reasons-empty">No original reflections in this period.</p>}
+      </section>}
       <div className="student-profile-history-heading"><h3><History size={17}/>Reflection history</h3><span>{history.length} {history.length === 1 ? "session" : "sessions"} · Newest first</span></div>
       <AttendanceLegend/>
       {!history.length ? <div className="student-profile-empty"><CalendarDays size={30} strokeWidth={1.4}/><h3>No reflection sessions yet</h3><p>Assignments and attendance will appear here when a reflection is assigned to this student.</p></div> : <div className="student-profile-history-scroll"><table className={`student-profile-history ${insightsOnly ? "insight-profile-history" : ""}`}><caption className="sr-only">Complete reflection session history for {student.name}, newest first. Rescheduled sessions retain their original attendance record.</caption><thead><tr><th scope="col">Date & session</th><th scope="col">Status</th><th scope="col">{insightsOnly ? "Assigned by" : "Reason & assignment"}</th>{!insightsOnly && <th scope="col">Attendance record</th>}</tr></thead><tbody>{history.map(assignment => <tr key={assignment.id} id={assignmentAnchor(assignment.id)}>

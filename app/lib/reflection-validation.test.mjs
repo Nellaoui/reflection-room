@@ -1,8 +1,17 @@
 import assert from "node:assert/strict";
+import { registerHooks } from "node:module";
 import test from "node:test";
-import { assignmentInput, attendanceInput, rosterInput, validDate, userCreateInput, userPatchInput } from "./reflection-validation.ts";
+
+const hooks = registerHooks({
+  resolve(specifier, context, nextResolve) {
+    return nextResolve(specifier === "@/app/lib/reflection-reasons" ? new URL("./reflection-reasons.ts", import.meta.url).href : specifier, context);
+  },
+});
+const { assignmentInput, attendanceInput, rosterInput, validDate, userCreateInput, userPatchInput } = await import("./reflection-validation.ts");
+hooks.deregister();
 
 const behaviourSteps = { chance: true, choice: true, consequence: true, none: false };
+const assignment = { studentIds: ["pupil-1"], slots: ["lunch"], date: "2026-10-22", reasonCategory: "disruption", behaviourSteps };
 
 test("generic calendar dates reject rollovers without restricting history date filters", () => {
   assert.equal(validDate("2028-02-29"), "2028-02-29");
@@ -13,42 +22,52 @@ test("generic calendar dates reject rollovers without restricting history date f
 });
 
 test("a student can receive lunch reflection and repeated IDs are deduplicated", () => {
-  assert.deepEqual(assignmentInput({ studentIds: ["pupil-1", "pupil-1"], slots: ["lunch"], date: "2026-10-22", reason: "  Disruption\n during\tclass.  ", behaviourSteps, assignedBy: "" }, "A Teacher"), {
-    studentIds: ["pupil-1"], slot: "lunch", date: "2026-10-22", reason: "Disruption during class.", behaviourSteps, assignedBy: "A Teacher",
+  assert.deepEqual(assignmentInput({ ...assignment, studentIds: ["pupil-1", "pupil-1"], assignedBy: "" }, "A Teacher"), {
+    studentIds: ["pupil-1"], slot: "lunch", date: "2026-10-22", reason: "Disruption in class", behaviourSteps, assignedBy: "A Teacher",
   });
-  assert.throws(() => assignmentInput({ studentIds: ["pupil-1"], slots: ["afternoon"], date: "2026-10-22", reason: "Disruption during class." }, "Teacher"), /lunch break only/);
+  assert.throws(() => assignmentInput({ ...assignment, slots: ["afternoon"] }, "Teacher"), /lunch break only/);
 });
 
-test("new assignments require a visible nonblank reason with the existing length limit", () => {
-  const input = { studentIds: ["pupil-1"], slots: ["lunch"], date: "2026-10-22", behaviourSteps };
-  for (const reason of [undefined, null, "", " \t\n ", "\u00a0\u3000", "\u200b\u200c\u2060"]) {
-    assert.throws(() => assignmentInput({ ...input, reason }, "Teacher"), /Reason is required/);
+test("new assignments require a known reason and visible details for Other", () => {
+  for (const reasonCategory of [undefined, null, "", "unrecognised", 42, false, {}, []]) {
+    assert.throws(() => assignmentInput({ ...assignment, reasonCategory, reason: "Forged free-text reason" }, "Teacher"), /Select a reason/);
   }
-  for (const reason of [42, false, {}, []]) assert.throws(() => assignmentInput({ ...input, reason }, "Teacher"), /Reason must be text/);
-  assert.throws(() => assignmentInput({ ...input, reason: "x".repeat(1001) }, "Teacher"), /1000 characters/);
-  assert.equal(assignmentInput({ ...input, reason: "Ａ reminder to reflect." }, "Teacher").reason, "A reminder to reflect.");
-  assert.equal(assignmentInput({ ...input, reason: "x".repeat(1000) }, "Teacher").reason.length, 1000);
+  const other = { ...assignment, reasonCategory: "other" };
+  for (const reasonDetails of [undefined, null, "", " \t\n ", "\u00a0\u3000", "\u200b\u200c\u2060", "\ufe0f\u2800"]) {
+    assert.throws(() => assignmentInput({ ...other, reasonDetails }, "Teacher"), /Other reason details is required/);
+  }
+  for (const reasonDetails of [42, false, {}, []]) {
+    assert.throws(() => assignmentInput({ ...other, reasonDetails }, "Teacher"), /Other reason details must be text/);
+  }
+  assert.throws(() => assignmentInput({ ...other, reasonDetails: "x".repeat(994) }, "Teacher"), /993 characters/);
+  assert.equal(assignmentInput({ ...other, reasonDetails: "  Ａ reminder\n to reflect. " }, "Teacher").reason, "Other: A reminder to reflect.");
+  assert.equal(assignmentInput({ ...other, reasonDetails: "x".repeat(993) }, "Teacher").reason.length, 1000);
 });
 
-test("behaviour steps require a boolean selection or None on its own", () => {
-  const input = { studentIds: ["pupil-1"], slots: ["lunch"], date: "2026-10-22", reason: "Fixture reason" };
+test("behaviour steps require all three or None with a visible explanation", () => {
   const noSteps = { chance: false, choice: false, consequence: false, none: false };
-  for (const steps of [undefined, null, [], true, {}, noSteps, { chance: true, choice: false, consequence: false }]) {
-    assert.throws(() => assignmentInput({ ...input, behaviourSteps: steps }, "Teacher"), /Select at least one behaviour step/);
+  const none = { ...noSteps, none: true };
+  for (const steps of [undefined, null, [], true, {}, noSteps, { ...noSteps, chance: true }, { ...behaviourSteps, choice: false }]) {
+    assert.throws(() => assignmentInput({ ...assignment, behaviourSteps: steps }, "Teacher"), /Select Choice, Chance and Consequence/);
   }
   for (const step of Object.keys(behaviourSteps)) {
-    for (const value of [null, 1, "true"]) {
-      assert.throws(() => assignmentInput({ ...input, behaviourSteps: { ...behaviourSteps, [step]: value } }, "Teacher"),
-        /Select at least one behaviour step/);
+    for (const value of [undefined, null, 1, "true"]) {
+      assert.throws(() => assignmentInput({ ...assignment, behaviourSteps: { ...behaviourSteps, [step]: value } }, "Teacher"),
+        /Select Choice, Chance and Consequence/);
     }
   }
-  assert.throws(() => assignmentInput({ ...input, behaviourSteps: { ...behaviourSteps, none: true } }, "Teacher"),
+  assert.throws(() => assignmentInput({ ...assignment, behaviourSteps: { ...none, choice: true, explanation: "Fixture explanation" } }, "Teacher"),
     /Select None of the above on its own/);
-  for (const steps of [behaviourSteps, { ...noSteps, chance: true }, { ...noSteps, choice: true }, { ...noSteps, consequence: true }, { ...noSteps, none: true }]) {
-    assert.deepEqual(assignmentInput({ ...input, behaviourSteps: steps }, "Teacher").behaviourSteps, steps);
+  for (const explanation of [undefined, null, "", " \t\n ", "\u200b\ufe0f\u2800"]) {
+    assert.throws(() => assignmentInput({ ...assignment, behaviourSteps: { ...none, explanation } }, "Teacher"), /Explanation is required/);
   }
-  const legacy = { chance: true, choice: true, consequence: true };
-  assert.deepEqual(assignmentInput({ ...input, behaviourSteps: legacy }, "Teacher").behaviourSteps, behaviourSteps);
+  for (const explanation of [42, false, {}, []]) {
+    assert.throws(() => assignmentInput({ ...assignment, behaviourSteps: { ...none, explanation } }, "Teacher"), /Explanation must be text/);
+  }
+  assert.throws(() => assignmentInput({ ...assignment, behaviourSteps: { ...none, explanation: "x".repeat(1001) } }, "Teacher"), /1000 characters/);
+  assert.deepEqual(assignmentInput(assignment, "Teacher").behaviourSteps, behaviourSteps);
+  assert.deepEqual(assignmentInput({ ...assignment, behaviourSteps: { ...none, explanation: "  One\n reason. " } }, "Teacher").behaviourSteps,
+    { ...none, explanation: "One reason." });
 });
 
 test("roster import deduplicates spelling case and whitespace within the same grade and class", () => {

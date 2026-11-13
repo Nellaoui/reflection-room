@@ -23,3 +23,10 @@
 .student-insights-table{white-space:normal}
 .student-insights-table td{overflow-wrap:anywhere}
 .student-insights-table th:nth-child(n+3),.student-insights-table td:nth-child(n+3){text-align:right}
+.student-profile-reasons{margin:0 0 22px}
+.student-profile-reason-counts{border:1px solid #e2e8d8;border-radius:7px;margin:0}
+.student-profile-reason-counts>div{display:flex;justify-content:space-between;gap:16px;padding:9px 13px;color:#496336;font-size:14px}
+.student-profile-reason-counts>div+div{border-top:1px solid #eaf0e1}
+.student-profile-reason-counts dt{overflow-wrap:anywhere}
+.student-profile-reason-counts dd{margin:0;font-weight:600;font-variant-numeric:tabular-nums}
+.student-profile-reasons-empty{margin:0;color:#6d8356;font-size:14px}

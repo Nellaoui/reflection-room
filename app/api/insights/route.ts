@@ -5,6 +5,7 @@ import { authenticatedApi, json } from "@/app/lib/reflection-api";
 import { requireInsightsAccess } from "@/app/lib/reflection-membership";
 import { insightAttribution } from "@/app/lib/reflection-insights";
 import { automaticFollowUpEvents, effectiveFollowUpSourceId } from "@/app/lib/follow-up-links";
+import { reflectionReasonCategory } from "@/app/lib/reflection-reasons";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +21,7 @@ export async function GET(request: Request) {
         id: reflectionAssignments.id, studentId: reflectionAssignments.studentId,
         date: reflectionAssignments.date, slot: reflectionAssignments.slot,
         status: reflectionAssignments.status, assignedBy: reflectionAssignments.assignedBy,
+        reason: reflectionAssignments.reason,
         createdAt: reflectionAssignments.createdAt, rescheduledFromId: effectiveFollowUpSourceId(followUpEvents),
         createdByUserId: reflectionAssignments.createdByUserId,
       }).from(reflectionAssignments).leftJoin(followUpEvents, eq(followUpEvents.targetId, reflectionAssignments.id))
@@ -32,9 +34,14 @@ export async function GET(request: Request) {
       db.select({ subject: staffGoogleIdentities.subject, memberId: staffGoogleIdentities.memberId }).from(staffGoogleIdentities),
     ]);
     const attributed = await insightAttribution(assignments, staff, googleLinks);
+    const categories = new Map(assignments.map(({ id, reason }) => [id, reflectionReasonCategory(reason)]));
     return json({
       students: roster,
       ...attributed,
+      assignments: attributed.assignments.map(assignment => ({
+        ...assignment,
+        reasonCategory: categories.get(assignment.id),
+      })),
       user: { name: user.displayName, email: user.email, role: user.role },
     });
   });

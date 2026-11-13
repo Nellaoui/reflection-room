@@ -139,7 +139,7 @@ test("teachers can record verified attendance but cannot manage staff or pupils"
       ["students/[id]", "DELETE", undefined, pupil.id],
     ]) assert.equal((await h.call(route, method, body, id)).status, 403);
 
-    const payload = { studentIds: [pupil.id], date: "2026-10-22", slots: ["lunch"], reason: "Reflection", behaviourSteps, assignedBy: "Freeform name" };
+    const payload = { studentIds: [pupil.id], date: "2026-10-22", slots: ["lunch"], reasonCategory: "disruption", behaviourSteps, assignedBy: "Freeform name" };
     assert.deepEqual((await h.call("assignments", "POST", payload)).data, { ok: true, created: 1, skipped: 0 });
     assert.equal((await h.call("assignments", "POST", payload)).status, 409);
     const assignment = (await h.call("data")).data.assignments[0];
@@ -223,7 +223,7 @@ test("one absence books two available lunches and keeps the original teacher att
   try {
     const { pupil, source } = await missedFixture(h, "pending");
     assert.equal((await h.call("assignments", "POST", {
-      studentIds: [pupil.id], date: "2026-10-26", slots: ["lunch"], reason: "Existing booking", behaviourSteps,
+      studentIds: [pupil.id], date: "2026-10-26", slots: ["lunch"], reasonCategory: "disruption", behaviourSteps,
     })).status, 200);
     h.state.identity = h.owner;
     const first = await h.call("assignments/[id]", "PATCH", { status: "absent" }, source.id);
@@ -409,7 +409,7 @@ test("stale clients cannot book morning or both breaks, and historical morning a
     const { pupil, source } = await missedFixture(h);
     const activityBefore = h.sqlite.prepare("SELECT count(*) AS n FROM activity_events").get().n;
     for (const slots of [["morning"], ["morning", "lunch"]]) {
-      const result = await h.call("assignments", "POST", { studentIds: [pupil.id], date: "2026-10-26", slots, reason: "A reflection reason", behaviourSteps });
+      const result = await h.call("assignments", "POST", { studentIds: [pupil.id], date: "2026-10-26", slots, reasonCategory: "disruption", behaviourSteps });
       assert.equal(result.status, 400);
       assert.match(result.data.error, /lunch break only/);
     }
@@ -455,22 +455,40 @@ test("the lunch move preview and apply require an administrator and a valid plan
   } finally { h.close(); }
 });
 
-test("new reflection submissions reject absent, blank and invalid reasons without writing records or activity", async () => {
+test("new reflections require an approved reason while Insights exposes only safe reason labels", async () => {
   const h = await harness();
   try {
-    const { pupil } = await missedFixture(h);
+    const { pupil, source } = await missedFixture(h);
     const before = h.sqlite.prepare("SELECT count(*) AS n FROM reflection_assignments").get().n;
     const activityBefore = h.sqlite.prepare("SELECT count(*) AS n FROM activity_events").get().n;
-    const valid = { studentIds: [pupil.id], date: "2026-10-26", slots: ["lunch"], reason: "A reflection reason", behaviourSteps };
-    for (const reason of [undefined, null, "", " \n\t ", "\u00a0\u3000", "\u200b\u2060", 42, "x".repeat(1001)]) {
-      const result = await h.call("assignments", "POST", { ...valid, reason });
+    const base = { studentIds: [pupil.id], date: "2026-10-26", slots: ["lunch"], behaviourSteps };
+    const invalid = [
+      [{ reason: "Legacy client text" }, /Select a reason/],
+      [{ reasonCategory: "pretend-category" }, /Select a reason/],
+      [{ reasonCategory: "other", reasonDetails: "\u200b\u2060" }, /Other reason details is required/],
+      [{ reasonCategory: "other", reasonDetails: "x".repeat(994) }, /993 characters/],
+    ];
+    for (const [reason, message] of invalid) {
+      const result = await h.call("assignments", "POST", { ...base, ...reason });
       assert.equal(result.status, 400);
-      assert.match(result.data.error, /Reason/);
+      assert.match(result.data.error, message);
       assert.equal(h.sqlite.prepare("SELECT count(*) AS n FROM reflection_assignments").get().n, before);
       assert.equal(h.sqlite.prepare("SELECT count(*) AS n FROM activity_events").get().n, activityBefore);
     }
-    assert.equal((await h.call("assignments", "POST", { ...valid, reason: "  Disruption\n during class.  " })).status, 200);
-    assert.equal(h.sqlite.prepare("SELECT reason FROM reflection_assignments WHERE date='2026-10-26'").get().reason, "Disruption during class.");
+    assert.equal((await h.call("assignments", "POST", { ...base, reasonCategory: "disruption", reasonDetails: "Ignore extra text" })).status, 200);
+    assert.equal((await h.call("assignments", "POST", {
+      ...base, date: "2026-10-29", reasonCategory: "other", reasonDetails: "  Private\n description.  ",
+    })).status, 200);
+    const saved = h.sqlite.prepare("SELECT date, reason FROM reflection_assignments WHERE slot = 'lunch' ORDER BY date").all();
+    assert.deepEqual(saved.map(row => row.reason), ["Disruption in class", "Other: Private description."]);
+    h.state.identity = h.owner;
+    const insights = await h.call("insights");
+    assert.equal(insights.status, 200);
+    assert.equal(insights.data.assignments.find(row => row.id === source.id).reasonCategory, "Previous reasons");
+    assert.deepEqual(insights.data.assignments.filter(row => row.slot === "lunch").map(row => row.reasonCategory), ["Disruption in class", "Other"]);
+    assert.ok(insights.data.assignments.every(row => !("reason" in row)));
+    assert.ok(!JSON.stringify(insights.data).includes("Private description."));
+    assert.ok(!JSON.stringify(insights.data).includes(source.reason));
   } finally { h.close(); }
 });
 
@@ -479,13 +497,16 @@ test("new bookings require a behaviour selection and record the selected options
   try {
     const { pupil } = await missedFixture(h);
     const before = h.sqlite.prepare("SELECT count(*) AS n FROM reflection_assignments").get().n;
-    const input = { studentIds: [pupil.id], date: "2026-10-26", slots: ["lunch"], reason: "Fixture reason" };
+    const input = { studentIds: [pupil.id], date: "2026-10-26", slots: ["lunch"], reasonCategory: "disruption" };
     const noSteps = { chance: false, choice: false, consequence: false, none: false };
     for (const [steps, message] of [
-      [undefined, /Select at least one behaviour step/],
-      [noSteps, /Select at least one behaviour step/],
-      [{ ...behaviourSteps, consequence: "true" }, /Select at least one behaviour step/],
+      [undefined, /Select Choice, Chance and Consequence/],
+      [noSteps, /Select Choice, Chance and Consequence/],
+      [{ ...behaviourSteps, choice: false }, /Select Choice, Chance and Consequence/],
+      [{ ...behaviourSteps, consequence: "true" }, /Select Choice, Chance and Consequence/],
       [{ ...noSteps, chance: true, none: true }, /Select None of the above on its own/],
+      [{ ...noSteps, none: true }, /Explanation is required/],
+      [{ ...noSteps, none: true, explanation: "\u200b\u2800" }, /Explanation is required/],
     ]) {
       const result = await h.call("assignments", "POST", { ...input, behaviourSteps: steps });
       assert.equal(result.status, 400);
@@ -494,10 +515,8 @@ test("new bookings require a behaviour selection and record the selected options
     assert.equal(h.sqlite.prepare("SELECT count(*) AS n FROM reflection_assignments").get().n, before);
     assert.equal(h.sqlite.prepare("SELECT count(*) AS n FROM activity_events WHERE action = 'reflection.assigned'").get().n, 0);
     const selections = [
-      ["2026-10-22", { ...noSteps, choice: true }, "Choice"],
-      ["2026-10-26", { ...noSteps, none: true }, "None of the above"],
-      ["2026-10-29", { ...behaviourSteps, choice: false }, "Chance, Consequence"],
-      ["2026-11-02", { chance: true, choice: true, consequence: true }, "Chance, Choice, Consequence"],
+      ["2026-10-22", behaviourSteps, "Choice, Chance, Consequence"],
+      ["2026-10-26", { ...noSteps, none: true, explanation: "  Same day\n incident.  " }, "None of the above — Same day incident."],
     ];
     for (const [date, steps] of selections) {
       assert.equal((await h.call("assignments", "POST", { ...input, date, behaviourSteps: steps })).status, 200);
@@ -523,13 +542,13 @@ test("server rejects stale clients assigning Fridays, weekends, holidays and unv
       ["2027-07-01", /outside the verified school calendar/],
     ];
     for (const [date, message] of closedDates) {
-      const result = await h.call("assignments", "POST", { studentIds: [pupil.id], date, slots: ["lunch"], reason: "Required reason", behaviourSteps, calendarOverride: true });
+      const result = await h.call("assignments", "POST", { studentIds: [pupil.id], date, slots: ["lunch"], reasonCategory: "disruption", behaviourSteps, calendarOverride: true });
       assert.equal(result.status, 400);
       assert.match(result.data.error, message);
       assert.equal(h.sqlite.prepare("SELECT count(*) AS n FROM reflection_assignments").get().n, before);
       assert.equal(h.sqlite.prepare("SELECT count(*) AS n FROM activity_events").get().n, activityBefore);
     }
-    assert.equal((await h.call("assignments", "POST", { studentIds: [pupil.id], date: "2026-10-29", slots: ["lunch"], reason: "Required reason", behaviourSteps })).status, 200);
+    assert.equal((await h.call("assignments", "POST", { studentIds: [pupil.id], date: "2026-10-29", slots: ["lunch"], reasonCategory: "disruption", behaviourSteps })).status, 200);
   } finally { h.close(); }
 });
 
@@ -609,7 +628,7 @@ test("reschedule rejects booked targets, invalid sources, earlier dates, and arc
   const { owner, teacher } = h;
   try {
     const { source, pupil } = await missedFixture(h);
-    assert.equal((await h.call("assignments", "POST", { studentIds: [pupil.id], date: "2026-10-26", slots: ["lunch"], reason: "Already booked", behaviourSteps })).status, 200);
+    assert.equal((await h.call("assignments", "POST", { studentIds: [pupil.id], date: "2026-10-26", slots: ["lunch"], reasonCategory: "disruption", behaviourSteps })).status, 200);
     assert.equal((await h.call("assignments/[id]/reschedule", "POST", { date: "2026-10-26", slot: "lunch" }, source.id)).status, 409);
     assert.equal((await h.call("assignments/[id]/reschedule", "POST", { date: "2026-10-21", slot: "lunch" }, source.id)).status, 400);
     assert.equal((await h.call("assignments/[id]/reschedule", "POST", { date: "2026-10-26", slot: ["morning", "lunch"] }, source.id)).status, 400);
@@ -650,14 +669,14 @@ test("bulk assignment conflicts roll back every selected pupil, including races"
   const { owner, teacher } = h;
   try {
     const { source, pupil, other } = await missedFixture(h);
-    assert.equal((await h.call("assignments", "POST", { studentIds: [pupil.id], date: source.date, slots: ["lunch"], reason: "Already booked", behaviourSteps })).status, 200);
-    const mixed = await h.call("assignments", "POST", { reason: "Fixture reflection reason", studentIds: [pupil.id, other.id], date: source.date, slots: ["lunch"], behaviourSteps });
+    assert.equal((await h.call("assignments", "POST", { studentIds: [pupil.id], date: source.date, slots: ["lunch"], reasonCategory: "disruption", behaviourSteps })).status, 200);
+    const mixed = await h.call("assignments", "POST", { reasonCategory: "disruption", studentIds: [pupil.id, other.id], date: source.date, slots: ["lunch"], behaviourSteps });
     assert.equal(mixed.status, 409);
     assert.match(mixed.data.error, /Test Pupil/);
     assert.equal((await h.call("data")).data.assignments.length, 2);
     const results = await Promise.all([
-      h.call("assignments", "POST", { reason: "Fixture reflection reason", studentIds: [pupil.id, other.id], date: "2026-10-26", slots: ["lunch"], behaviourSteps }),
-      h.call("assignments", "POST", { reason: "Fixture reflection reason", studentIds: [pupil.id, other.id], date: "2026-10-26", slots: ["lunch"], behaviourSteps }),
+      h.call("assignments", "POST", { reasonCategory: "disruption", studentIds: [pupil.id, other.id], date: "2026-10-26", slots: ["lunch"], behaviourSteps }),
+      h.call("assignments", "POST", { reasonCategory: "disruption", studentIds: [pupil.id, other.id], date: "2026-10-26", slots: ["lunch"], behaviourSteps }),
     ]);
     assert.deepEqual(results.map((result) => result.status).sort(), [200, 409]);
     assert.equal((await h.call("data")).data.assignments.length, 4);
@@ -678,8 +697,8 @@ test("a raced conflict in a later bulk statement rolls back earlier successful s
     const firstIds = [...other.slice(0, 9).map((pupil) => pupil.id), shared.id];
     const secondIds = [...other.slice(9).map((pupil) => pupil.id), shared.id];
     const results = await Promise.all([
-      h.call("assignments", "POST", { reason: "Fixture reflection reason", studentIds: firstIds, date: "2026-10-26", slots: ["lunch"], behaviourSteps }),
-      h.call("assignments", "POST", { reason: "Fixture reflection reason", studentIds: secondIds, date: "2026-10-26", slots: ["lunch"], behaviourSteps }),
+      h.call("assignments", "POST", { reasonCategory: "disruption", studentIds: firstIds, date: "2026-10-26", slots: ["lunch"], behaviourSteps }),
+      h.call("assignments", "POST", { reasonCategory: "disruption", studentIds: secondIds, date: "2026-10-26", slots: ["lunch"], behaviourSteps }),
     ]);
     assert.deepEqual(results.map((result) => result.status).sort(), [200, 409]);
     const savedIds = new Set((await h.call("data")).data.assignments.map((assignment) => assignment.studentId));
@@ -876,7 +895,7 @@ test("deleting staff removes access and sessions, hides the account and preserve
     await h.call("students", "POST", { source: "Manual entry", students: [{ name: "History Pupil", grade: "Year 7", className: "7A" }] });
     const pupil = (await h.call("data")).data.students[0];
     h.state.identity = h.teacher;
-    await h.call("assignments", "POST", { reason: "Fixture reflection reason", studentIds: [pupil.id], date: "2026-10-22", slots: ["lunch"], behaviourSteps, assignedBy: "Forged name" });
+    await h.call("assignments", "POST", { reasonCategory: "disruption", studentIds: [pupil.id], date: "2026-10-22", slots: ["lunch"], behaviourSteps, assignedBy: "Forged name" });
     const assignment = (await h.call("data")).data.assignments[0];
     await h.call("assignments/[id]", "PATCH", { status: "present" }, assignment.id);
     h.sqlite.prepare("INSERT INTO staff_google_identities(subject,member_id,email,created_at,last_authenticated_at) VALUES(?,?,?,?,?)")
@@ -960,7 +979,7 @@ test("activity is administrator-only and records trusted actors across the refle
     await h.call("students/[id]", "PATCH", { className: "7B" }, pupil.id);
     h.state.identity = h.teacher;
     assert.equal((await h.call("activity")).status, 403);
-    await h.call("assignments", "POST", { reason: "Fixture reflection reason", studentIds: [pupil.id], date: "2026-10-22", slots: ["lunch"], behaviourSteps, assignedBy: "Forged actor", actorId: "forged" });
+    await h.call("assignments", "POST", { reasonCategory: "disruption", studentIds: [pupil.id], date: "2026-10-22", slots: ["lunch"], behaviourSteps, assignedBy: "Forged actor", actorId: "forged" });
     const original = (await h.call("data")).data.assignments[0];
     assert.equal(original.assignedBy, "Confirmed Teacher");
     const absent = await h.call("assignments/[id]", "PATCH", { status: "absent", actorName: "Forged actor" }, original.id);
@@ -1052,7 +1071,7 @@ test("moderators use teacher operations and insights but cannot read or mutate a
     assert.equal(h.sqlite.prepare("SELECT name,active FROM students WHERE id=?").get(pupil.id).name, "Moderated Pupil");
     assert.equal(h.sqlite.prepare("SELECT active FROM students WHERE id=?").get(pupil.id).active, 1);
     assert.equal((await h.call("insights")).status, 200);
-    const assignment = { reason: "Fixture reflection reason", studentIds: [pupil.id], date: "2026-10-22", slots: ["lunch"], behaviourSteps, assignedBy: "Spoofed admin" };
+    const assignment = { reasonCategory: "disruption", studentIds: [pupil.id], date: "2026-10-22", slots: ["lunch"], behaviourSteps, assignedBy: "Spoofed admin" };
     assert.equal((await h.call("assignments", "POST", assignment)).status, 200);
     const original = (await h.call("data")).data.assignments[0];
     assert.equal(original.assignedBy, "School Moderator");
@@ -1129,7 +1148,7 @@ test("insights attribute exact identities, preserve historical staff and omit op
     assert.deepEqual(Object.keys(result).sort(), ["assignments", "students", "teachers", "user"]);
     assert.deepEqual(Object.keys(result.students[0]).sort(), ["active", "className", "grade", "id", "name"]);
     assert.equal(result.assignments.length, 8);
-    for (const assignment of result.assignments) assert.deepEqual(Object.keys(assignment).sort(), ["assignedBy", "createdAt", "date", "id", "rescheduledFromId", "rescheduledToId", "slot", "status", "studentId", "teacherId"]);
+    for (const assignment of result.assignments) assert.deepEqual(Object.keys(assignment).sort(), ["assignedBy", "createdAt", "date", "id", "reasonCategory", "rescheduledFromId", "rescheduledToId", "slot", "status", "studentId", "teacherId"]);
     for (const teacher of result.teachers) assert.deepEqual(Object.keys(teacher).sort(), ["deleted", "id", "name", "role", "status"]);
     const reflection = id => result.assignments.find(assignment => assignment.id === id);
     assert.equal(reflection("linked-record").teacherId, "linked-teacher");

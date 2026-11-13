@@ -1,3 +1,5 @@
+import { formatReflectionReason } from "@/app/lib/reflection-reasons";
+
 export class ValidationError extends Error {}
 
 export type ReflectionSlot = "morning" | "lunch";
@@ -43,18 +45,26 @@ export function validId(value: unknown): string {
   return value;
 }
 
+function reflectionText(value: unknown, label: string, maxLength: number): string {
+  const cleaned = text(value, label, maxLength, true);
+  if (!cleaned.replace(/[\p{White_Space}\p{Default_Ignorable_Code_Point}\u2800]/gu, "")) {
+    throw new ValidationError(`${label} is required.`);
+  }
+  return cleaned;
+}
+
 function behaviourStepsInput(value: unknown) {
-  const selectionRequired = "Select at least one behaviour step or None of the above.";
-  const { chance, choice, consequence, none: noneSelected } = record(value, selectionRequired);
-  // An already-open form can still submit the previous all-three confirmation.
-  const none = noneSelected === undefined && chance === true && choice === true && consequence === true ? false : noneSelected;
-  if (typeof chance !== "boolean" || typeof choice !== "boolean" || typeof consequence !== "boolean" || typeof none !== "boolean") {
+  const selectionRequired = "Select Choice, Chance and Consequence, or choose None of the above.";
+  const { choice, chance, consequence, none, explanation } = record(value, selectionRequired);
+  if (typeof choice !== "boolean" || typeof chance !== "boolean" || typeof consequence !== "boolean" || typeof none !== "boolean") {
     throw new ValidationError(selectionRequired);
   }
-  const hasSteps = chance || choice || consequence;
-  if (none && hasSteps) throw new ValidationError("Select None of the above on its own.");
-  if (!none && !hasSteps) throw new ValidationError(selectionRequired);
-  return { chance, choice, consequence, none };
+  if (none) {
+    if (choice || chance || consequence) throw new ValidationError("Select None of the above on its own.");
+    return { choice, chance, consequence, none, explanation: reflectionText(explanation, "Explanation", 1000) };
+  }
+  if (!choice || !chance || !consequence) throw new ValidationError(selectionRequired);
+  return { choice, chance, consequence, none };
 }
 
 export function assignmentInput(value: unknown, fallbackName: string) {
@@ -66,9 +76,10 @@ export function assignmentInput(value: unknown, fallbackName: string) {
   if (!Array.isArray(body.slots) || body.slots.length !== 1 || body.slots[0] !== "lunch") {
     throw new ValidationError("Reflection runs during lunch break only.");
   }
-  if (body.reason === undefined || body.reason === null) throw new ValidationError("Reason is required.");
-  const reason = text(body.reason, "Reason", 1000);
-  if (!reason.replace(/[\p{White_Space}\p{Cf}]/gu, "")) throw new ValidationError("Reason is required.");
+  if (typeof body.reasonCategory !== "string") throw new ValidationError("Select a reason.");
+  const details = body.reasonCategory === "other" ? reflectionText(body.reasonDetails, "Other reason details", 1000 - "Other: ".length) : "";
+  const reason = formatReflectionReason(body.reasonCategory, details);
+  if (!reason) throw new ValidationError("Select a reason.");
   return {
     studentIds,
     slot: "lunch" as const,
